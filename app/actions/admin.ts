@@ -1,33 +1,36 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { getAllUsers, getAllTimeEntries, type EmployeeType } from "@/lib/db"
+import { getAllUsers, getAllTimeEntries, getUserById, type EmployeeType } from "@/lib/db"
 import { createClient } from "@/lib/supabase/server"
 import type { Bundesland } from "@/lib/holidays"
-import { getUserPermissionMatrix, requireAnyPermission, requirePermission, updateUserPermissionMatrix } from "@/lib/permissions-server"
+import {
+  getCurrentUserAccess,
+  getUserPermissionMatrix,
+  requirePermission,
+  updateUserPermissionMatrix,
+} from "@/lib/permissions-server"
 import type { AccessProfile, AppPermission } from "@/lib/permissions"
+import { canActorManageTargetTime, canActorViewTargetTime, filterUsersVisibleInAdmin } from "@/lib/visibility"
 
 export async function checkIsAdmin(): Promise<boolean> {
-  try {
-    await requireAnyPermission([
-      "admin.manage_permissions",
-      "users.manage_profile",
-      "users.assign_projects",
-      "time.manage_all_entries",
-      "time.manage_projects",
-      "vacation.manage_requests",
-      "vacation.manage_blocked_days",
-    ])
-    return true
-  } catch {
-    return false
-  }
+  const access = await getCurrentUserAccess()
+  return access.profile === "admin"
 }
 
 export async function getAdminDashboardData(startDate: string, endDate: string) {
   await requirePermission("users.view")
 
-  const [users, entries] = await Promise.all([getAllUsers(), getAllTimeEntries(startDate, endDate)])
+  const access = await getCurrentUserAccess()
+  const actor = access.dbUser
+  if (!actor) {
+    throw new Error("Kein Zugriff")
+  }
+
+  const [allUsers, entries] = await Promise.all([getAllUsers(), getAllTimeEntries(startDate, endDate)])
+  const users = filterUsersVisibleInAdmin(actor, allUsers, access)
+  const visibleIds = new Set(users.map((u) => u.id))
+  const filteredEntries = entries.filter((e) => visibleIds.has(e.user_id))
 
   const year = Number.parseInt(endDate.slice(0, 4), 10)
   const yearStart = `${year}-01-01`
@@ -55,7 +58,7 @@ export async function getAdminDashboardData(startDate: string, endDate: string) 
   }
 
   const userStats = users.map((user) => {
-    const userEntries = entries.filter((entry) => entry.user_id === user.id)
+    const userEntries = filteredEntries.filter((entry) => entry.user_id === user.id)
     const totalHours = userEntries.reduce((sum, entry) => sum + Number(entry.hours), 0)
     const vacation = vacationByUser.get(user.id) || { approved: 0, pending: 0 }
     const yearlyTarget = Number(user.vacation_days_per_year || 30)
@@ -73,9 +76,9 @@ export async function getAdminDashboardData(startDate: string, endDate: string) 
 
   return {
     users: userStats,
-    entries,
-    totalHours: entries.reduce((sum, entry) => sum + Number(entry.hours), 0),
-    totalEntries: entries.length,
+    entries: filteredEntries,
+    totalHours: filteredEntries.reduce((sum, entry) => sum + Number(entry.hours), 0),
+    totalEntries: filteredEntries.length,
   }
 }
 
@@ -90,7 +93,15 @@ export async function updateUserRole(userId: string, role: AccessProfile) {
 }
 
 export async function getTimeEntriesForUserAdmin(userId: string, startDate: string, endDate: string) {
-  await requirePermission("time.view_all_entries")
+  const access = await getCurrentUserAccess()
+  const actor = access.dbUser
+  if (!actor) throw new Error("Kein Zugriff")
+
+  const target = await getUserById(userId)
+  if (!target) throw new Error("Benutzer nicht gefunden")
+  if (!canActorViewTargetTime(actor, target, access)) {
+    throw new Error("Kein Zugriff")
+  }
 
   const supabase = createClient()
   const { data } = await supabase
@@ -111,9 +122,19 @@ export async function updateTimeEntryAdmin(
   project: string,
   projectId?: string,
 ) {
-  await requirePermission("time.manage_all_entries")
+  const access = await getCurrentUserAccess()
+  const actor = access.dbUser
+  if (!actor) throw new Error("Kein Zugriff")
 
   const supabase = createClient()
+  const { data: existing } = await supabase.from("time_entries").select("user_id").eq("id", entryId).single()
+  if (!existing?.user_id) throw new Error("Eintrag nicht gefunden")
+
+  const target = await getUserById(existing.user_id as string)
+  if (!target || !canActorManageTargetTime(actor, target, access)) {
+    throw new Error("Kein Zugriff")
+  }
+
   const { error } = await supabase
     .from("time_entries")
     .update({
@@ -129,9 +150,19 @@ export async function updateTimeEntryAdmin(
 }
 
 export async function deleteTimeEntryAdmin(entryId: string) {
-  await requirePermission("time.manage_all_entries")
+  const access = await getCurrentUserAccess()
+  const actor = access.dbUser
+  if (!actor) throw new Error("Kein Zugriff")
 
   const supabase = createClient()
+  const { data: existing } = await supabase.from("time_entries").select("user_id").eq("id", entryId).single()
+  if (!existing?.user_id) throw new Error("Eintrag nicht gefunden")
+
+  const target = await getUserById(existing.user_id as string)
+  if (!target || !canActorManageTargetTime(actor, target, access)) {
+    throw new Error("Kein Zugriff")
+  }
+
   const { error } = await supabase.from("time_entries").delete().eq("id", entryId)
 
   if (error) throw error
@@ -190,7 +221,13 @@ export async function updateUserBundesland(userId: string, bundesland: Bundeslan
 }
 
 export async function getUserClosedMonths(userId: string) {
-  await requirePermission("time.view_all_entries")
+  const access = await getCurrentUserAccess()
+  const actor = access.dbUser
+  if (!actor) throw new Error("Kein Zugriff")
+  const target = await getUserById(userId)
+  if (!target || !canActorViewTargetTime(actor, target, access)) {
+    throw new Error("Kein Zugriff")
+  }
 
   const supabase = createClient()
   const { data } = await supabase
@@ -206,7 +243,19 @@ export async function getUserClosedMonths(userId: string) {
 export async function deleteMonthClosure(closureId: string) {
   await requirePermission("time.manage_month_closures")
 
+  const access = await getCurrentUserAccess()
+  const actor = access.dbUser
+  if (!actor) throw new Error("Kein Zugriff")
+
   const supabase = createClient()
+  const { data: closure } = await supabase.from("month_closures").select("user_id").eq("id", closureId).single()
+  if (!closure?.user_id) throw new Error("Eintrag nicht gefunden")
+
+  const target = await getUserById(closure.user_id as string)
+  if (!target || !canActorManageTargetTime(actor, target, access)) {
+    throw new Error("Kein Zugriff")
+  }
+
   const { error } = await supabase.from("month_closures").delete().eq("id", closureId)
 
   if (error) throw error
@@ -215,7 +264,10 @@ export async function deleteMonthClosure(closureId: string) {
 
 export async function fetchAllUsers() {
   await requirePermission("users.view")
-  return getAllUsers()
+  const access = await getCurrentUserAccess()
+  const actor = access.dbUser
+  if (!actor) return []
+  return filterUsersVisibleInAdmin(actor, await getAllUsers(), access)
 }
 
 export async function updateUserCategory(userId: string, category: string) {

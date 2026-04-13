@@ -38,7 +38,7 @@ import {
 } from "@/app/actions/admin"
 import { getAllProjects, getUserProjectIds, assignProjectsToUser, type Project } from "@/app/actions/projects"
 import { type User, type EmployeeType, type UserCategory, EMPLOYEE_TYPE_DEFAULTS, USER_CATEGORY_LABELS } from "@/lib/db"
-import { type AccessProfile, type AppPermission, type PermissionGroup } from "@/lib/permissions"
+import { buildPermissionMap, type AccessProfile, type AppPermission, type PermissionGroup } from "@/lib/permissions"
 import { format, startOfMonth, endOfMonth, subMonths } from "date-fns"
 import { de } from "date-fns/locale"
 import { BUNDESLAENDER, type Bundesland } from "@/lib/holidays"
@@ -859,19 +859,26 @@ export function AdminUserList({
       </Dialog>
 
       <Dialog open={!!editingAccessUser} onOpenChange={() => setEditingAccessUser(null)}>
-        <DialogContent className="max-w-4xl">
-          <DialogHeader>
+        <DialogContent className="w-[99vw] !max-w-[1400px] sm:!max-w-[1400px] max-h-[92vh] overflow-hidden p-0">
+          <DialogHeader className="px-6 pt-6">
             <DialogTitle>Rechte & Zugriffe</DialogTitle>
             <DialogDescription>
               Definiere Themenrechte und Einzelberechtigungen für <strong>{editingAccessUser?.name}</strong> direkt im Tool.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-5">
+          <div className="space-y-5 overflow-y-auto px-6 pb-6">
             <div className="grid gap-4 md:grid-cols-[220px_1fr]">
               <div className="space-y-2">
                 <Label>Zugriffsprofil</Label>
-                <Select value={accessProfileValue} onValueChange={(value) => setAccessProfileValue(value as AccessProfile)}>
+                <Select
+                  value={accessProfileValue}
+                  onValueChange={(value) => {
+                    const v = value as AccessProfile
+                    setAccessProfileValue(v)
+                    setPermissionValues({ ...buildPermissionMap(v) })
+                  }}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -882,7 +889,9 @@ export function AdminUserList({
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Das Profil setzt die Basis. Die Schalter darunter erlauben die Feineinstellung pro Thema.
+                  {accessProfileValue === "admin"
+                    ? "Admin hat immer vollen Zugriff auf alle Bereiche — ohne Einzelschalter."
+                    : "Das Profil setzt die Basis. Die Schalter darunter erlauben die Feineinstellung pro Thema (Zeiterfassung, Urlaub, …)."}
                 </p>
               </div>
 
@@ -890,46 +899,57 @@ export function AdminUserList({
                 <CardContent className="p-4">
                   <p className="text-sm font-medium">Hinweis</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Änderungen gelten unabhängig von Microsoft-Gruppen. Für jede Themenkarte können Rechte einzeln aktiviert oder deaktiviert werden.
+                    Rechte werden nur in dieser Anwendung gespeichert (Datenbank), nicht über Microsoft-Gruppen gesteuert.
                   </p>
                 </CardContent>
               </Card>
             </div>
 
-            <Tabs defaultValue={permissionGroups[0]?.key || "admin"} className="gap-4">
-              <TabsList className="grid w-full grid-cols-2 md:grid-cols-4">
+            {accessProfileValue === "admin" ? (
+              <Card className="border-primary/30 bg-primary/5">
+                <CardContent className="p-4">
+                  <p className="text-sm font-medium">Vollzugriff (Admin)</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Dieses Profil umfasst Zeiterfassung, Urlaub und Verwaltung ohne weitere Aufteilung.
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Tabs defaultValue={permissionGroups[0]?.key || "admin"} className="gap-4">
+                <TabsList className="grid w-full grid-cols-2 md:grid-cols-4">
+                  {permissionGroups.map((group) => (
+                    <TabsTrigger key={group.key} value={group.key}>{group.label}</TabsTrigger>
+                  ))}
+                </TabsList>
+
                 {permissionGroups.map((group) => (
-                  <TabsTrigger key={group.key} value={group.key}>{group.label}</TabsTrigger>
-                ))}
-              </TabsList>
-
-              {permissionGroups.map((group) => (
-                <TabsContent key={group.key} value={group.key}>
-                  <div className="rounded-xl border border-border/70 bg-card/90">
-                    <div className="border-b border-border/70 px-4 py-3">
-                      <p className="font-medium">{group.label}</p>
-                      <p className="text-xs text-muted-foreground mt-1">{group.description}</p>
-                    </div>
-                    <div className="divide-y divide-border/70">
-                      {group.permissions.map((permission) => (
-                        <div key={permission.key} className="flex items-start justify-between gap-4 px-4 py-3">
-                          <div className="space-y-1">
-                            <p className="text-sm font-medium">{permission.label}</p>
-                            <p className="text-xs text-muted-foreground">{permission.description}</p>
+                  <TabsContent key={group.key} value={group.key}>
+                    <div className="rounded-xl border border-border/70 bg-card/90">
+                      <div className="border-b border-border/70 px-4 py-3">
+                        <p className="font-medium">{group.label}</p>
+                        <p className="text-xs text-muted-foreground mt-1">{group.description}</p>
+                      </div>
+                      <div className="divide-y divide-border/70">
+                        {group.permissions.map((permission) => (
+                          <div key={permission.key} className="flex items-start justify-between gap-4 px-4 py-3">
+                            <div className="space-y-1">
+                              <p className="text-sm font-medium">{permission.label}</p>
+                              <p className="text-xs text-muted-foreground">{permission.description}</p>
+                            </div>
+                            <Switch
+                              checked={!!permissionValues[permission.key]}
+                              onCheckedChange={(checked) => handleTogglePermission(permission.key, checked)}
+                            />
                           </div>
-                          <Switch
-                            checked={!!permissionValues[permission.key]}
-                            onCheckedChange={(checked) => handleTogglePermission(permission.key, checked)}
-                          />
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                </TabsContent>
-              ))}
-            </Tabs>
+                  </TabsContent>
+                ))}
+              </Tabs>
+            )}
 
-            <div className="flex justify-end gap-2 border-t border-border/70 pt-3">
+            <div className="sticky bottom-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 flex justify-end gap-2 border-t border-border/70 pt-3">
               <Button variant="outline" onClick={() => setEditingAccessUser(null)} disabled={isSavingAccess}>Schließen</Button>
               <Button onClick={handleSaveAccess} disabled={isSavingAccess}>
                 {isSavingAccess ? "Speichere..." : "Rechte speichern"}

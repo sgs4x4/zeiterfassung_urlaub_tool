@@ -9,6 +9,7 @@ import { format } from "date-fns"
 import { de } from "date-fns/locale"
 import { sendEmail } from "@/lib/email"
 import { getCurrentUserAccess, requirePermission } from "@/lib/permissions-server"
+import { getVacationCalendarAbsenceScope } from "@/lib/visibility"
 
 const ADMIN_EMAILS = [
   "clemens.rau@sgs4x4.de",
@@ -427,6 +428,56 @@ export async function getAllAbsences(): Promise<Absence[]> {
     ...a,
     user: a.users,
   })) as Absence[]
+}
+
+function mapAbsenceRows(data: unknown[] | null): Absence[] {
+  return (data || []).map((a: any) => ({
+    ...a,
+    user: a.users,
+  })) as Absence[]
+}
+
+/** Kalenderansicht: Umfang abhängig von Rechten (gesamtes Unternehmen vs. eigenes Team/Kategorie). */
+export async function getAbsencesForCalendarView(): Promise<Absence[]> {
+  const session = (await getServerSession()) as any
+  if (!session?.user?.id || !session?.user?.email || !session?.user?.name) {
+    throw new Error("Nicht angemeldet")
+  }
+
+  const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
+  const access = await getCurrentUserAccess()
+  const scope = getVacationCalendarAbsenceScope(access)
+
+  if (!scope) {
+    throw new Error("Kein Zugriff")
+  }
+
+  const supabase = await createClient()
+
+  if (scope === "all") {
+    const { data, error } = await supabase
+      .from("absences")
+      .select("*, users:users!absences_user_id_fkey(name, email)")
+      .order("created_at", { ascending: false })
+
+    if (error) throw new Error(`Fehler beim Laden der Abwesenheiten: ${error.message}`)
+    return mapAbsenceRows(data)
+  }
+
+  let userIds = [user.id]
+  if (user.category) {
+    const { data: teammates } = await supabase.from("users").select("id").eq("category", user.category)
+    userIds = [...new Set([user.id, ...(teammates || []).map((r: { id: string }) => r.id)])]
+  }
+
+  const { data, error } = await supabase
+    .from("absences")
+    .select("*, users:users!absences_user_id_fkey(name, email)")
+    .in("user_id", userIds)
+    .order("created_at", { ascending: false })
+
+  if (error) throw new Error(`Fehler beim Laden der Team-Abwesenheiten: ${error.message}`)
+  return mapAbsenceRows(data)
 }
 
 export async function updateAbsenceStatus(id: string, status: "approved" | "rejected") {

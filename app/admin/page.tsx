@@ -86,8 +86,8 @@ export default async function AdminPage() {
             canManageUserProfile={access.canManageUsers}
             canAssignProjects={access.canAssignProjects}
             canManagePermissions={access.canManagePermissions}
-            canViewEntries={access.canViewAllTimeEntries}
-            canEditEntries={access.canManageAllTimeEntries}
+            canViewEntries={access.canViewOthersTimeData}
+            canEditEntries={access.canManageOthersTimeData}
           />
         </section>
       </main>

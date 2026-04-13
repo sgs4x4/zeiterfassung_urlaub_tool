@@ -3,6 +3,7 @@
 import { getServerSession } from "@/lib/auth"
 import {
   findOrCreateUser,
+  getUserById,
   createTimeEntry,
   updateTimeEntry,
   getTimeEntriesForUser,
@@ -15,7 +16,8 @@ import {
 import { revalidatePath } from "next/cache"
 import { differenceInDays } from "date-fns"
 import { createClient } from "@/lib/supabase/server"
-import { getCurrentUserAccess, requirePermission } from "@/lib/permissions-server"
+import { getCurrentUserAccess } from "@/lib/permissions-server"
+import { canActorManageTargetTime } from "@/lib/visibility"
 
 export async function getCurrentUser() {
   const session = await getServerSession()
@@ -93,31 +95,40 @@ export async function removeTimeEntry(entryId: string) {
 
   const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
   const access = await getCurrentUserAccess()
+  const supabase = await createClient()
+  const { data: entryRow } = await supabase.from("time_entries").select("user_id, date").eq("id", entryId).single()
 
-  if (!access.canManageAllTimeEntries) {
-    const supabase = await createClient()
-    const { data: entry } = await supabase.from("time_entries").select("date").eq("id", entryId).single()
+  if (!entryRow) {
+    throw new Error("Eintrag nicht gefunden")
+  }
 
-    if (entry) {
-      const entryDate = new Date(entry.date)
+  const entryUserId = entryRow.user_id as string
+  const isOwnEntry = entryUserId === user.id
 
-      const { isMonthClosed } = await import("./month-closure")
-      const monthClosed = await isMonthClosed(entryDate.getFullYear(), entryDate.getMonth() + 1)
+  if (!isOwnEntry) {
+    const target = await getUserById(entryUserId)
+    if (!target || !canActorManageTargetTime(user, target, access)) {
+      throw new Error("Kein Zugriff")
+    }
+  } else if (!access.canManageAllTimeEntries) {
+    const entryDate = new Date(entryRow.date as string)
 
-      if (monthClosed) {
-        throw new Error("Dieser Monat wurde bereits abgeschlossen und Einträge können nicht mehr gelöscht werden")
-      }
+    const { isMonthClosed } = await import("./month-closure")
+    const monthClosed = await isMonthClosed(entryDate.getFullYear(), entryDate.getMonth() + 1)
 
-      const today = new Date()
-      const daysDifference = differenceInDays(today, entryDate)
+    if (monthClosed) {
+      throw new Error("Dieser Monat wurde bereits abgeschlossen und Einträge können nicht mehr gelöscht werden")
+    }
 
-      if (daysDifference > 5) {
-        throw new Error("Einträge können nur maximal 5 Tage rückwirkend gelöscht werden")
-      }
+    const today = new Date()
+    const daysDifference = differenceInDays(today, entryDate)
+
+    if (daysDifference > 5) {
+      throw new Error("Einträge können nur maximal 5 Tage rückwirkend gelöscht werden")
     }
   }
 
-  await deleteTimeEntry(entryId, user.id)
+  await deleteTimeEntry(entryId, entryUserId)
   revalidatePath("/dashboard")
 
   return { success: true }
@@ -164,7 +175,17 @@ export async function getMonthlyOvertimeData(year: number, month: number) {
 }
 
 export async function saveTimeEntryForUser(targetUserId: string, formData: FormData) {
-  await requirePermission("time.manage_all_entries")
+  const session = await getServerSession()
+  if (!session?.user?.id || !session?.user?.email || !session?.user?.name) {
+    throw new Error("Nicht angemeldet")
+  }
+
+  const actor = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
+  const access = await getCurrentUserAccess()
+  const target = await getUserById(targetUserId)
+  if (!target || !canActorManageTargetTime(actor, target, access)) {
+    throw new Error("Kein Zugriff")
+  }
 
   const date = formData.get("date") as string
   const description = (formData.get("description") as string) || null

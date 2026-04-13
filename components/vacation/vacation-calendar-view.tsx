@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ChevronLeft, ChevronRight, Lock } from "lucide-react"
 import {
-  getAllAbsences,
+  getAbsencesForCalendarView,
   getMyAbsences,
   getBlockedDays,
   getAllBlockedDays,
@@ -61,7 +61,7 @@ export function VacationCalendarView({ isAdmin, showAllAbsences = false }: Vacat
     setLoading(true)
     try {
       const [absenceData, blockedData] = await Promise.all([
-        isAdmin || showAllAbsences ? getAllAbsences() : getMyAbsences(),
+        isAdmin || showAllAbsences ? getAbsencesForCalendarView() : getMyAbsences(),
         isAdmin ? getAllBlockedDays(currentMonth.getFullYear(), currentMonth.getMonth() + 1) : getBlockedDays(currentMonth.getFullYear(), currentMonth.getMonth() + 1),
       ])
       setAbsences(absenceData)

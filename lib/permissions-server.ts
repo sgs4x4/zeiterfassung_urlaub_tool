@@ -132,8 +132,6 @@ export async function updateUserPermissionMatrix(params: {
   const access = await requirePermission("admin.manage_permissions")
   const supabase = createClient()
   const profile = normalizeAccessProfile(params.profile)
-  const desiredPermissions = buildPermissionMap(profile, params.permissions)
-  const defaultPermissions = buildPermissionMap(profile)
 
   const { error: roleError } = await supabase.from("users").update({ role: profile }).eq("id", params.userId)
   if (roleError) {
@@ -147,6 +145,20 @@ export async function updateUserPermissionMatrix(params: {
     }
     throw new Error(`Fehler beim Zurücksetzen der Rechte: ${deleteError.message}`)
   }
+
+  if (profile === "admin") {
+    revalidatePath("/admin")
+    revalidatePath("/admin/projects")
+    revalidatePath("/admin/team-calendar")
+    revalidatePath("/admin/vacation-requests")
+    revalidatePath("/dashboard")
+    revalidatePath("/urlaub")
+    revalidatePath("/urlaub/team")
+    return { success: true }
+  }
+
+  const desiredPermissions = buildPermissionMap(profile, params.permissions)
+  const defaultPermissions = buildPermissionMap(profile)
 
   const overrides = ALL_PERMISSION_KEYS.flatMap((key) => {
     if (desiredPermissions[key] === defaultPermissions[key]) {

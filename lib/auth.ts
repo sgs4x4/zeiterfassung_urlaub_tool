@@ -9,7 +9,7 @@ export const authOptions: NextAuthOptions = {
       wellKnown: `https://login.microsoftonline.com/${process.env.AZURE_AD_TENANT_ID}/v2.0/.well-known/openid-configuration`,
       authorization: {
         params: {
-          scope: "openid profile email User.Read GroupMember.Read.All",
+          scope: "openid profile email User.Read",
         },
       },
       clientId: process.env.AZURE_AD_CLIENT_ID!,
@@ -30,45 +30,16 @@ export const authOptions: NextAuthOptions = {
     },
   ],
   callbacks: {
-    async jwt({ token, user, account, profile }) {
+    async jwt({ token, user, account }) {
       if (account && user) {
         token.accessToken = account.access_token
         token.userId = user.id
         token.roles = (user as any).roles || []
-
-        if (account.access_token) {
-          try {
-            const graphResponse = await fetch("https://graph.microsoft.com/v1.0/me/memberOf", {
-              headers: {
-                Authorization: `Bearer ${account.access_token}`,
-              },
-            })
-
-            if (graphResponse.ok) {
-              const data = await graphResponse.json()
-              const groups: string[] = data.value?.map((group: any) => group.displayName || group.id) || []
-              token.roles = [...new Set([...(token.roles as string[]), ...groups])]
-
-              const roleLower = (token.roles as string[]).map((r: string) => r.toLowerCase())
-              const isGlobalAdmin   = roleLower.includes("global.admin")
-              token.isAdmin        = isGlobalAdmin || roleLower.includes("zeiterfassung.admin")
-              token.isReporter     = roleLower.includes("zeiterfassung.reporter")
-              token.canUseVacation = isGlobalAdmin || roleLower.includes("urlaubsplanung.user") || roleLower.includes("urlaubsplanung.admin") || roleLower.includes("zeiterfassung.admin")
-              token.isVacationAdmin= isGlobalAdmin || roleLower.includes("urlaubsplanung.admin") || roleLower.includes("zeiterfassung.admin")
-            }
-          } catch (error) {
-            console.error("[v0] Error fetching M365 groups:", error)
-            token.isAdmin         = false
-            token.isReporter      = false
-            token.canUseVacation  = false
-            token.isVacationAdmin = false
-          }
-        } else {
-          token.isAdmin         = false
-          token.isReporter      = false
-          token.canUseVacation  = false
-          token.isVacationAdmin = false
-        }
+        // Rollen & Rechte ausschließlich aus der App-Datenbank (users.role + user_permissions), nicht aus Entra-Gruppen.
+        token.isAdmin = false
+        token.isReporter = false
+        token.canUseVacation = false
+        token.isVacationAdmin = false
       }
       return token
     },
