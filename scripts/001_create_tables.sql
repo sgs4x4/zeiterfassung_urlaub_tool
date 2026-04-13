@@ -6,6 +6,11 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL,
   role TEXT DEFAULT 'employee' CHECK (role IN ('employee', 'admin')),
+  notify_vacation_status BOOLEAN NOT NULL DEFAULT TRUE,
+  notify_vacation_pending BOOLEAN NOT NULL DEFAULT TRUE,
+  notify_vacation_approved BOOLEAN NOT NULL DEFAULT TRUE,
+  notify_vacation_rejected BOOLEAN NOT NULL DEFAULT TRUE,
+  notify_vacation_withdrawn BOOLEAN NOT NULL DEFAULT TRUE,
   weekly_hours DECIMAL(4,1) DEFAULT 40.0,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()

@@ -39,6 +39,16 @@ function parseLocalDate(dateString: string) {
   return new Date(year, month - 1, day)
 }
 
+function getEmployeeColor(seed: string): string {
+  let hash = 0
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash << 5) - hash + seed.charCodeAt(i)
+    hash |= 0
+  }
+  const hue = Math.abs(hash) % 360
+  return `hsl(${hue} 62% 46%)`
+}
+
 interface VacationCalendarViewProps {
   isAdmin: boolean
   showAllAbsences?: boolean
@@ -289,12 +299,15 @@ export function VacationCalendarView({ isAdmin, showAllAbsences = false }: Vacat
                         const dayCount = getAbsenceDayCount(a)
                         const isStartDay = position === "start" || position === "single"
                         
+                        const employeeSeed = a.user?.email || a.user?.name || a.user_id || a.id
+                        const employeeColor = getEmployeeColor(employeeSeed)
+                        const displayName = a.user?.name || TYPE_LABELS[a.type]
+
                         return (
                           <div
                             key={a.id + i}
                             className={cn(
-                              "text-[10px] px-1.5 py-0.5 text-white font-medium truncate leading-tight border transition-all",
-                              TYPE_COLORS[a.type],
+                              "text-[10px] px-1.5 py-0.5 text-white font-medium truncate leading-tight border border-transparent transition-all",
                               a.status === "pending" ? "border-white/80 opacity-85" : "border-transparent",
                               {
                                 "rounded": position === "single",
@@ -303,13 +316,13 @@ export function VacationCalendarView({ isAdmin, showAllAbsences = false }: Vacat
                                 "rounded-none -mx-2": position === "middle",
                               }
                             )}
+                            style={{ backgroundColor: employeeColor }}
                             title={isAdmin ? `${a.user?.name} – ${TYPE_LABELS[a.type]} (${dayCount}d, ${STATUS_LABELS[a.status] || a.status})` : `${TYPE_LABELS[a.type]} (${dayCount}d, ${STATUS_LABELS[a.status] || a.status})`}
                           >
                             {isStartDay ? (
                               <>
                                 {a.status === "pending" ? "⏳ " : ""}
-                                <span className="font-semibold">{isAdmin ? (a.user?.name?.split(" ")[0] || TYPE_LABELS[a.type]) : TYPE_LABELS[a.type]}</span>
-                                {dayCount > 1 && <span className="ml-1 text-[9px] opacity-90">({dayCount}d)</span>}
+                                <span className="font-semibold">{displayName}</span>
                               </>
                             ) : (
                               <span className="opacity-0">•</span>
@@ -330,12 +343,10 @@ export function VacationCalendarView({ isAdmin, showAllAbsences = false }: Vacat
 
             {/* Legend */}
             <div className="flex gap-4 flex-wrap mt-4 pt-4 border-t">
-              {Object.entries(TYPE_LABELS).map(([key, label]) => (
-                <div key={key} className="flex items-center gap-1.5">
-                  <div className={cn("w-3 h-3 rounded-sm", TYPE_COLORS[key])} />
-                  <span className="text-xs text-muted-foreground">{label}</span>
-                </div>
-              ))}
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm bg-primary/80" />
+                <span className="text-xs text-muted-foreground">Farbe = Mitarbeiter</span>
+              </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-3 h-3 rounded-sm bg-foreground/70" />
                 <span className="text-xs text-muted-foreground">Genehmigt</span>
@@ -384,7 +395,7 @@ export function VacationCalendarView({ isAdmin, showAllAbsences = false }: Vacat
                         <div className="flex items-start gap-2">
                           <div className={cn("w-1.5 h-1.5 rounded-full mt-1.5 shrink-0", TYPE_COLORS[a.type])} />
                           <div>
-                          {isAdmin && <p className="text-sm font-medium">{a.user?.name}</p>}
+                          {(isAdmin || showAllAbsences) && <p className="text-sm font-medium">{a.user?.name}</p>}
                           <p className="text-sm text-muted-foreground">{TYPE_LABELS[a.type]}</p>
                           <Badge
                             variant="outline"
@@ -406,7 +417,7 @@ export function VacationCalendarView({ isAdmin, showAllAbsences = false }: Vacat
                 {selectedAbsence && (
                   <div className="mt-3 rounded-md border border-border/70 bg-muted/20 p-2.5 text-xs">
                     <p className="font-semibold text-foreground">Details</p>
-                    {isAdmin && <p className="mt-1 text-muted-foreground">Mitarbeiter: {selectedAbsence.user?.name || "-"}</p>}
+                    {(isAdmin || showAllAbsences) && <p className="mt-1 text-muted-foreground">Mitarbeiter: {selectedAbsence.user?.name || "-"}</p>}
                     <p className="mt-0.5 text-muted-foreground">Typ: {TYPE_LABELS[selectedAbsence.type]}</p>
                     <p className="mt-0.5 text-muted-foreground">
                       Zeitraum: {format(parseLocalDate(selectedAbsence.start_date), "dd.MM.yyyy")} – {format(parseLocalDate(selectedAbsence.end_date), "dd.MM.yyyy")}

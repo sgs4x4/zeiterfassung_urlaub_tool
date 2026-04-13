@@ -173,7 +173,7 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
 export const ALL_PERMISSION_KEYS = PERMISSION_GROUPS.flatMap((group) => group.permissions.map((permission) => permission.key))
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<AccessProfile, AppPermission[]> = {
-  employee: ["vacation.request_own"],
+  employee: ["vacation.request_own", "vacation.view_team_calendar"],
   reporter: [
     "admin.access",
     "users.view",

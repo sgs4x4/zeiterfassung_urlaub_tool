@@ -10,6 +10,8 @@ import { de } from "date-fns/locale"
 import { sendEmail } from "@/lib/email"
 import { getCurrentUserAccess, requirePermission } from "@/lib/permissions-server"
 import { getVacationCalendarAbsenceScope } from "@/lib/visibility"
+import { getHolidaysForYear } from "@/app/actions/holidays"
+import type { Bundesland } from "@/lib/holidays"
 
 const ADMIN_EMAILS = [
   "clemens.rau@sgs4x4.de",
@@ -47,13 +49,71 @@ function isBlockedDayApplicableToUser(blockedDay: BlockedDay, userCategory: stri
   return userCategory ? blockedCategories.includes(userCategory) : false
 }
 
-function countWorkdays(startDate: string, endDate: string): number {
-  try {
-    const days = eachDayOfInterval({ start: new Date(startDate), end: new Date(endDate) })
-    return days.filter((d) => !isWeekend(d)).length
-  } catch {
-    return 0
+function parseIsoDateLocal(isoDate: string): Date {
+  const [year, month, day] = isoDate.split("-").map(Number)
+  return new Date(year, month - 1, day)
+}
+
+async function countVacationDaysExcludingHolidays(
+  startDate: string,
+  endDate: string,
+  bundesland: Bundesland,
+): Promise<number> {
+  const start = parseIsoDateLocal(startDate)
+  const end = parseIsoDateLocal(endDate)
+  const startYear = start.getFullYear()
+  const endYear = end.getFullYear()
+  const years: number[] = []
+  for (let y = startYear; y <= endYear; y++) years.push(y)
+
+  const holidays = (await Promise.all(years.map((year) => getHolidaysForYear(year, bundesland)))).flat()
+  const holidayDates = new Set(holidays.map((h) => h.date))
+  const days = eachDayOfInterval({ start, end })
+
+  return days.filter((d) => {
+    if (isWeekend(d)) return false
+    const dateStr = format(d, "yyyy-MM-dd")
+    return !holidayDates.has(dateStr)
+  }).length
+}
+
+type VacationEmailStatus = "pending" | "approved" | "rejected" | "withdrawn"
+
+async function getRecipientsForVacationStatusEmails(
+  recipients: string[],
+  status: VacationEmailStatus,
+): Promise<string[]> {
+  const uniqueRecipients = [...new Set(recipients.filter(Boolean))]
+  if (uniqueRecipients.length === 0) return []
+
+  const supabase = await createClient()
+  const { data: users } = await supabase
+    .from("users")
+    .select(
+      "email, notify_vacation_status, notify_vacation_pending, notify_vacation_approved, notify_vacation_rejected, notify_vacation_withdrawn",
+    )
+    .in("email", uniqueRecipients)
+
+  const preferenceMap = new Map<string, { legacy: boolean; pending: boolean; approved: boolean; rejected: boolean; withdrawn: boolean }>()
+  for (const user of users || []) {
+    preferenceMap.set(String(user.email).toLowerCase(), {
+      legacy: user.notify_vacation_status !== false,
+      pending: user.notify_vacation_pending !== false,
+      approved: user.notify_vacation_approved !== false,
+      rejected: user.notify_vacation_rejected !== false,
+      withdrawn: user.notify_vacation_withdrawn !== false,
+    })
   }
+
+  return uniqueRecipients.filter((email) => {
+    const key = email.toLowerCase()
+    if (!preferenceMap.has(key)) return true
+    const pref = preferenceMap.get(key)!
+    if (status === "pending") return pref.pending && pref.legacy
+    if (status === "approved") return pref.approved && pref.legacy
+    if (status === "rejected") return pref.rejected && pref.legacy
+    return pref.withdrawn && pref.legacy
+  })
 }
 
 function getMonthDateRange(year: number, month: number) {
@@ -97,7 +157,10 @@ async function sendStatusChangeEmails(params: {
   const start = format(new Date(absence.start_date), "dd.MM.yyyy", { locale: de })
   const end = format(new Date(absence.end_date), "dd.MM.yyyy", { locale: de })
 
-  const recipients = [...new Set([employeeEmail, ...ADMIN_EMAILS])]
+  const recipients = await getRecipientsForVacationStatusEmails([employeeEmail, ...ADMIN_EMAILS], status)
+  if (recipients.length === 0) {
+    return
+  }
 
   await sendEmail({
     to: recipients,
@@ -128,7 +191,10 @@ async function sendWithdrawEmails(params: {
   const start = format(new Date(absence.start_date), "dd.MM.yyyy", { locale: de })
   const end = format(new Date(absence.end_date), "dd.MM.yyyy", { locale: de })
 
-  const recipients = [...new Set([employeeEmail, ...ADMIN_EMAILS])]
+  const recipients = await getRecipientsForVacationStatusEmails([employeeEmail, ...ADMIN_EMAILS], "withdrawn")
+  if (recipients.length === 0) {
+    return
+  }
 
   await sendEmail({
     to: recipients,
@@ -172,7 +238,7 @@ export async function requestAbsence(formData: FormData) {
     throw new Error("Halbe Urlaubstage sind nur für einzelne Tage möglich")
   }
 
-  const baseDays = countWorkdays(startDate, endDate)
+  const baseDays = await countVacationDaysExcludingHolidays(startDate, endDate, (user.bundesland as Bundesland) || "BY")
   const days = dayPart === "full" ? baseDays : 0.5
 
   if (days <= 0) {
@@ -251,8 +317,15 @@ export async function requestAbsence(formData: FormData) {
   // E-Mail an Admins
   const typeLabels: Record<string, string> = { vacation: "Urlaub", sick: "Krankheit", other: "Sonstiges" }
   try {
+    const recipients = await getRecipientsForVacationStatusEmails(ADMIN_EMAILS, "pending")
+    if (recipients.length === 0) {
+      revalidatePath("/urlaub")
+      revalidatePath("/admin")
+      return
+    }
+
     await sendEmail({
-      to: ADMIN_EMAILS,
+      to: recipients,
       subject: `Neuer Abwesenheitsantrag: ${typeLabels[type]} – ${user.name}`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px;">
@@ -322,7 +395,7 @@ export async function updateMyAbsence(id: string, formData: FormData) {
     throw new Error("Halbe Urlaubstage sind nur für einzelne Tage möglich")
   }
 
-  const baseDays = countWorkdays(startDate, endDate)
+  const baseDays = await countVacationDaysExcludingHolidays(startDate, endDate, (user.bundesland as Bundesland) || "BY")
   const days = dayPart === "full" ? baseDays : 0.5
 
   if (days <= 0) {

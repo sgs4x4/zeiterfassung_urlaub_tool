@@ -54,6 +54,7 @@ function NewRequestDialog({
   initialEndDate,
   editingAbsence,
   readOnly = false,
+  bundesland,
 }: {
   open: boolean
   onClose: () => void
@@ -62,6 +63,7 @@ function NewRequestDialog({
   initialEndDate?: string
   editingAbsence?: Absence | null
   readOnly?: boolean
+  bundesland: Bundesland
 }) {
   const [type, setType] = useState<"vacation" | "sick" | "other">("vacation")
   const [startDate, setStartDate] = useState("")
@@ -70,6 +72,8 @@ function NewRequestDialog({
   const [reason, setReason] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [calculatedDays, setCalculatedDays] = useState<number>(0)
+  const [isCalculatingDays, setIsCalculatingDays] = useState(false)
 
   const reset = () => {
     setType("vacation")
@@ -97,6 +101,44 @@ function NewRequestDialog({
     setDayPart("full")
     setReason("")
   }, [open, initialStartDate, initialEndDate, editingAbsence])
+
+  useEffect(() => {
+    const calculateDays = async () => {
+      if (!open || type !== "vacation" || !startDate || !endDate) {
+        setCalculatedDays(0)
+        return
+      }
+
+      setIsCalculatingDays(true)
+      try {
+        const start = parseLocalDate(startDate)
+        const end = parseLocalDate(endDate)
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+          setCalculatedDays(0)
+          return
+        }
+
+        const years: number[] = []
+        for (let year = start.getFullYear(); year <= end.getFullYear(); year++) {
+          years.push(year)
+        }
+        const holidays = (await Promise.all(years.map((year) => getHolidaysForYear(year, bundesland)))).flat()
+        const holidayDates = new Set(holidays.map((h) => h.date))
+        const vacationDays = eachDayOfInterval({ start, end }).filter((day) => {
+          if (isWeekend(day)) return false
+          return !holidayDates.has(format(day, "yyyy-MM-dd"))
+        }).length
+
+        setCalculatedDays(dayPart === "full" ? vacationDays : 0.5)
+      } catch {
+        setCalculatedDays(0)
+      } finally {
+        setIsCalculatingDays(false)
+      }
+    }
+
+    calculateDays()
+  }, [open, type, startDate, endDate, dayPart, bundesland])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -174,6 +216,11 @@ function NewRequestDialog({
               {dayPart !== "full" && (
                 <p className="text-xs text-muted-foreground">Halbtage sind nur für einzelne Tage möglich.</p>
               )}
+              <p className="text-xs text-muted-foreground">
+                {isCalculatingDays
+                  ? "Berechne Urlaubstage..."
+                  : `Verbrauchte Urlaubstage: ${calculatedDays}`}
+              </p>
             </div>
           )}
           <div className="space-y-1.5">
@@ -183,7 +230,11 @@ function NewRequestDialog({
           {error && <p className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded">{error}</p>}
           <div className="flex gap-2 pt-1">
             {!readOnly && (
-              <Button type="submit" disabled={loading} className="flex-1">
+              <Button
+                type="submit"
+                disabled={loading || (type === "vacation" && (isCalculatingDays || calculatedDays <= 0))}
+                className="flex-1"
+              >
                 {loading ? "Wird gespeichert..." : editingAbsence ? "Änderungen speichern" : "Antrag einreichen"}
               </Button>
             )}
@@ -661,6 +712,7 @@ export function VacationDashboard({ isAdmin, bundesland = "BY" }: { isAdmin: boo
         initialEndDate={prefillEndDate}
         editingAbsence={editingAbsence}
         readOnly={isReadOnlyView}
+        bundesland={bundesland}
       />
     </main>
   )

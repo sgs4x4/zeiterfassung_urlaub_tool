@@ -16,6 +16,11 @@ export type User = {
   email: string
   name: string
   role: UserRole
+  notify_vacation_status: boolean
+  notify_vacation_pending: boolean
+  notify_vacation_approved: boolean
+  notify_vacation_rejected: boolean
+  notify_vacation_withdrawn: boolean
   weekly_hours: number
   monthly_hours: number
   vacation_days_per_year: number
