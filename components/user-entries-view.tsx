@@ -25,7 +25,7 @@ import { format, startOfMonth, endOfMonth, subMonths } from "date-fns"
 import { de } from "date-fns/locale"
 import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
-import { cn } from "@/lib/utils"
+import { cn, formatHours } from "@/lib/utils"
 
 interface TimeEntry {
   id: string
@@ -348,7 +348,7 @@ export function UserEntriesView({
       <div className="grid grid-cols-3 gap-4">
         <Card>
           <CardContent className="pt-6">
-            <div className="text-2xl font-bold">{totalHours.toFixed(2)}h</div>
+            <div className="text-2xl font-bold">{formatHours(totalHours)}</div>
             <p className="text-sm text-muted-foreground">Gesamtstunden</p>
           </CardContent>
         </Card>
@@ -416,7 +416,7 @@ export function UserEntriesView({
                       )}
                     </TableCell>
                     <TableCell className="max-w-xs truncate">{entry.description || "–"}</TableCell>
-                    <TableCell className="text-right font-semibold">{Number(entry.hours).toFixed(2)}h</TableCell>
+                    <TableCell className="text-right font-semibold">{formatHours(Number(entry.hours))}</TableCell>
                     {canManageEntries && (
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">

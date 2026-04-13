@@ -7,15 +7,49 @@ import { Progress } from "@/components/ui/progress"
 import { getMyTimeEntries } from "@/app/actions/time-entries"
 import { format, startOfWeek, endOfWeek, eachDayOfInterval, isSameDay } from "date-fns"
 import { de } from "date-fns/locale"
-import type { TimeEntry } from "@/lib/db"
-import { useRouter } from "next/navigation"
+import type { TimeEntry, WeeklySchedule } from "@/lib/db"
+import { formatHours } from "@/lib/utils"
 import { timeEntryEvents } from "@/lib/events"
 
-const DAILY_TARGET = 8
+const WEEKDAY_LABELS = {
+  monday: "Mo",
+  tuesday: "Di",
+  wednesday: "Mi",
+  thursday: "Do",
+  friday: "Fr",
+  saturday: "Sa",
+  sunday: "So",
+} as const
 
-export function WeekOverview({ weeklyHours = 40 }: { weeklyHours?: number }) {
-  const router = useRouter()
-  const [weekData, setWeekData] = useState<{ day: string; date: Date; hours: number }[]>([])
+const WEEKDAY_INDEX_TO_KEY = {
+  0: "sunday",
+  1: "monday",
+  2: "tuesday",
+  3: "wednesday",
+  4: "thursday",
+  5: "friday",
+  6: "saturday",
+} as const
+
+const DEFAULT_WEEKLY_SCHEDULE: WeeklySchedule = {
+  monday: 8,
+  tuesday: 8,
+  wednesday: 8,
+  thursday: 8,
+  friday: 8,
+  saturday: 0,
+  sunday: 0,
+}
+
+export function WeekOverview({
+  weeklyHours = 40,
+  weeklySchedule,
+}: {
+  weeklyHours?: number
+  weeklySchedule?: WeeklySchedule
+}) {
+  const schedule = weeklySchedule ?? DEFAULT_WEEKLY_SCHEDULE
+  const [weekData, setWeekData] = useState<{ day: string; date: Date; hours: number; target: number }[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   const loadWeekData = async () => {
@@ -25,13 +59,16 @@ export function WeekOverview({ weeklyHours = 40 }: { weeklyHours?: number }) {
 
     const entries = await getMyTimeEntries(format(weekStart, "yyyy-MM-dd"), format(weekEnd, "yyyy-MM-dd"))
 
-    const days = eachDayOfInterval({ start: weekStart, end: weekEnd }).slice(0, 5) // Mo-Fr
+    const days = eachDayOfInterval({ start: weekStart, end: weekEnd })
     const data = days.map((date) => {
       const entry = entries.find((e: TimeEntry) => isSameDay(new Date(e.date), date))
+      const weekdayKey = WEEKDAY_INDEX_TO_KEY[date.getDay()]
+      const target = schedule[weekdayKey] ?? (date.getDay() >= 1 && date.getDay() <= 5 ? weeklyHours / 5 : 0)
       return {
         day: format(date, "EEE", { locale: de }),
         date,
         hours: entry ? Number(entry.hours) : 0,
+        target,
       }
     })
 
@@ -97,18 +134,21 @@ export function WeekOverview({ weeklyHours = 40 }: { weeklyHours?: number }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        <div className="space-y-2">
-          <div className="flex items-baseline justify-between">
-            <span className="text-3xl font-bold">{totalHours.toFixed(2)}h</span>
-            <span className="text-sm text-muted-foreground">von {weeklyHours}h</span>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-3xl font-bold">{totalHours.toFixed(2)}h</div>
+            <div className="text-xs text-muted-foreground">Erfasst</div>
           </div>
-          <Progress value={progress} className="h-2" />
-          {totalHours >= weeklyHours && <p className="text-xs text-green-500">Wochenziel erreicht!</p>}
+          <div className="text-right">
+            <div className="text-sm font-semibold">{weeklyHours}h / Woche</div>
+          </div>
         </div>
+
+     
 
         <div className="space-y-3">
           {weekData.map((day) => {
-            const dayProgress = Math.min((day.hours / DAILY_TARGET) * 100, 100)
+            const dayProgress = day.target > 0 ? Math.min((day.hours / day.target) * 100, 100) : 0
             const isToday = isSameDay(day.date, new Date())
             return (
               <div
@@ -124,7 +164,7 @@ export function WeekOverview({ weeklyHours = 40 }: { weeklyHours?: number }) {
                   <Progress value={dayProgress} className="h-1.5" />
                 </div>
                 <span className="text-sm font-semibold min-w-[48px] text-right">
-                  {day.hours > 0 ? `${day.hours.toFixed(2)}h` : "-"}
+                  {day.hours > 0 ? formatHours(day.hours) : "-"}
                 </span>
               </div>
             )

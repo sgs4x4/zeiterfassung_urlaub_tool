@@ -32,13 +32,71 @@ import {
   getUserAccessConfig,
   saveUserAccessConfig,
   updateUserEmployeeType,
+  updateUserWeeklySchedule,
   updateUserBundesland,
   updateUserCategory,
   updateUserVacationDays,
 } from "@/app/actions/admin"
 import { getAllProjects, getUserProjectIds, assignProjectsToUser, type Project } from "@/app/actions/projects"
-import { type User, type EmployeeType, type UserCategory, EMPLOYEE_TYPE_DEFAULTS, USER_CATEGORY_LABELS } from "@/lib/db"
+import { type User, type EmployeeType, type UserCategory, type Weekday, type WeeklySchedule, EMPLOYEE_TYPE_DEFAULTS, USER_CATEGORY_LABELS } from "@/lib/db"
 import { buildPermissionMap, type AccessProfile, type AppPermission, type PermissionGroup } from "@/lib/permissions"
+import { formatHours } from "@/lib/utils"
+
+const WEEKDAYS: Weekday[] = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+]
+
+const WEEKDAY_LABELS: Record<Weekday, string> = {
+  monday: "Mo",
+  tuesday: "Di",
+  wednesday: "Mi",
+  thursday: "Do",
+  friday: "Fr",
+  saturday: "Sa",
+  sunday: "So",
+}
+
+const DEFAULT_WEEKLY_SCHEDULE: WeeklySchedule = {
+  monday: 8,
+  tuesday: 8,
+  wednesday: 8,
+  thursday: 8,
+  friday: 8,
+  saturday: 0,
+  sunday: 0,
+}
+
+const DEFAULT_WEEKLY_SCHEDULE_INPUTS: Record<Weekday, string> = WEEKDAYS.reduce((acc, day) => ({
+  ...acc,
+  [day]: `${Math.floor(DEFAULT_WEEKLY_SCHEDULE[day])}:${String(Math.round((DEFAULT_WEEKLY_SCHEDULE[day] % 1) * 60)).padStart(2, "0")}`,
+}), {} as Record<Weekday, string>)
+
+function formatHoursInput(value: number) {
+  const hours = Math.floor(value)
+  const minutes = Math.round((value - hours) * 60)
+  return `${hours}:${String(minutes).padStart(2, "0")}`
+}
+
+function parseHoursInput(value: string) {
+  const normalized = value.replace(",", ".").trim()
+  if (normalized.includes(":")) {
+    const [hoursStr, minutesStr] = normalized.split(":")
+    const hours = Number.parseInt(hoursStr, 10)
+    const minutes = Number.parseInt(minutesStr, 10)
+    if (!Number.isNaN(hours) && !Number.isNaN(minutes) && minutes >= 0 && minutes < 60) {
+      return hours + minutes / 60
+    }
+  }
+  const numberValue = Number.parseFloat(normalized)
+  return Number.isNaN(numberValue) ? 0 : numberValue
+}
+
 import { format, startOfMonth, endOfMonth, subMonths } from "date-fns"
 import { de } from "date-fns/locale"
 import { BUNDESLAENDER, type Bundesland } from "@/lib/holidays"
@@ -81,6 +139,10 @@ export function AdminUserList({
   const [editingEmployee, setEditingEmployee] = useState<User | null>(null)
   const [employeeTypeValue, setEmployeeTypeValue] = useState<EmployeeType>("vollzeit")
   const [monthlyHoursValue, setMonthlyHoursValue] = useState("")
+  const [weeklyScheduleValue, setWeeklyScheduleValue] = useState<WeeklySchedule>(DEFAULT_WEEKLY_SCHEDULE)
+  const [weeklyScheduleInputs, setWeeklyScheduleInputs] = useState<Record<Weekday, string>>(DEFAULT_WEEKLY_SCHEDULE_INPUTS)
+  const [employeeSaveStatus, setEmployeeSaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle")
+  const [employeeSaveMessage, setEmployeeSaveMessage] = useState<string | null>(null)
 
   const [editingBundesland, setEditingBundesland] = useState<User | null>(null)
   const [bundeslandValue, setBundeslandValue] = useState<Bundesland>("BY")
@@ -121,12 +183,40 @@ export function AdminUserList({
 
   const handleUpdateEmployee = async () => {
     if (!editingEmployee) return
+
+    setEmployeeSaveStatus("saving")
+    setEmployeeSaveMessage(null)
+
+    const parsedSchedule = WEEKDAYS.reduce((acc, day) => {
+      const hours = parseHoursInput(weeklyScheduleInputs[day] ?? "0")
+      return {
+        ...acc,
+        [day]: hours,
+      }
+    }, {} as WeeklySchedule)
+
     try {
       await updateUserEmployeeType(editingEmployee.id, employeeTypeValue, Number.parseFloat(monthlyHoursValue))
-      setEditingEmployee(null)
+      await updateUserWeeklySchedule(editingEmployee.id, parsedSchedule)
+      setWeeklyScheduleValue(parsedSchedule)
+      setWeeklyScheduleInputs(
+        WEEKDAYS.reduce((acc, day) => ({
+          ...acc,
+          [day]: formatHoursInput(parsedSchedule[day]),
+        }), {} as Record<Weekday, string>),
+      )
+      setEmployeeSaveStatus("success")
+      setEmployeeSaveMessage("Sollstunden erfolgreich gespeichert.")
       loadUsers()
+      setTimeout(() => {
+        setEditingEmployee(null)
+        setEmployeeSaveStatus("idle")
+        setEmployeeSaveMessage(null)
+      }, 1200)
     } catch (error) {
       console.error("Fehler beim Aktualisieren:", error)
+      setEmployeeSaveStatus("error")
+      setEmployeeSaveMessage(error instanceof Error ? error.message : "Fehler beim Speichern")
     }
   }
 
@@ -563,7 +653,7 @@ export function AdminUserList({
                       <div className="min-w-[180px]">
                         <div className="flex items-center justify-between mb-1">
                           <span className={`text-xs font-medium ${hoursStatus.color}`}>
-                            {user.totalHours.toFixed(1)}h / {target}h
+                            {formatHours(user.totalHours)} / {formatHours(target)}
                           </span>
                           <span className="text-[10px] text-muted-foreground">{user.entriesCount} Einträge</span>
                         </div>
@@ -607,9 +697,21 @@ export function AdminUserList({
                                   <DropdownMenuSeparator />
                                   <DropdownMenuLabel className="text-[11px] text-muted-foreground">Rahmendaten</DropdownMenuLabel>
                                   <DropdownMenuItem onClick={() => {
+                                    const schedule = typeof user.weekly_schedule === "string"
+                                      ? JSON.parse(user.weekly_schedule as string)
+                                      : user.weekly_schedule || DEFAULT_WEEKLY_SCHEDULE
                                     setEditingEmployee(user)
                                     setEmployeeTypeValue((user.employee_type as EmployeeType) || "vollzeit")
                                     setMonthlyHoursValue((user.monthly_hours || 173).toString())
+                                    setWeeklyScheduleValue(schedule)
+                                    setWeeklyScheduleInputs(
+                                      WEEKDAYS.reduce((acc, day) => ({
+                                        ...acc,
+                                        [day]: formatHoursInput(schedule[day] ?? 0),
+                                      }), {} as Record<Weekday, string>),
+                                    )
+                                    setEmployeeSaveStatus("idle")
+                                    setEmployeeSaveMessage(null)
                                   }}>
                                     <TimerReset className="mr-2 h-3.5 w-3.5" />
                                     Beschäftigung & Sollstunden
@@ -745,6 +847,42 @@ export function AdminUserList({
               />
               {employeeTypeValue === "minijob" && (
                 <p className="text-xs text-muted-foreground mt-1">Max. 43h bei 603€-Grenze und 13,90€ Mindestlohn (2026)</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label>Wochenplan Mo–So</Label>
+              <div className="grid grid-cols-2 gap-3">
+                {WEEKDAYS.map((weekday) => (
+                  <div key={weekday} className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">{WEEKDAY_LABELS[weekday]}</Label>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      pattern="[0-9:,]*"
+                      placeholder="8:00"
+                      value={weeklyScheduleInputs[weekday] ?? "0:00"}
+                      onChange={(e) => setWeeklyScheduleInputs((prev) => ({
+                        ...prev,
+                        [weekday]: e.target.value,
+                      }))}
+                      onBlur={(e) => {
+                        const parsed = parseHoursInput(e.target.value)
+                        setWeeklyScheduleInputs((prev) => ({
+                          ...prev,
+                          [weekday]: formatHoursInput(parsed),
+                        }))
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Summe: {formatHours(Object.values(WEEKDAYS).reduce((sum, day) => sum + parseHoursInput(weeklyScheduleInputs[day] ?? "0"), 0))} / Woche
+              </p>
+              {employeeSaveMessage && (
+                <Alert variant={employeeSaveStatus === "error" ? "destructive" : "default"} className="mt-2">
+                  <AlertDescription>{employeeSaveMessage}</AlertDescription>
+                </Alert>
               )}
             </div>
             <div className="flex justify-end gap-2 border-t border-border/70 pt-3">

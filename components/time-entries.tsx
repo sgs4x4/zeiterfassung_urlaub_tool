@@ -7,6 +7,7 @@ import { Calendar, Trash2, FileText, Clock, ChevronDown, ChevronUp } from "lucid
 import { getMyTimeEntries, removeTimeEntry } from "@/app/actions/time-entries"
 import { getProjects, type Project } from "@/app/actions/projects"
 import { format, startOfMonth, endOfMonth } from "date-fns"
+import { formatHours } from "@/lib/utils"
 import { de } from "date-fns/locale"
 import type { TimeEntry } from "@/lib/db"
 import { useRouter } from "next/navigation"
@@ -164,7 +165,7 @@ export function TimeEntries() {
                   <div key={date} className="space-y-2">
                     <div className="flex items-center justify-between">
                       <h3 className="font-semibold text-sm text-muted-foreground">{formatDate(date)}</h3>
-                      <span className="text-sm font-semibold text-primary">Gesamt: {totalHours.toFixed(2)}h</span>
+                      <span className="text-sm font-semibold text-primary">Gesamt: {formatHours(totalHours)}</span>
                     </div>
                     <div className="space-y-2">
                       {dayEntries.map((entry) => {
@@ -203,7 +204,7 @@ export function TimeEntries() {
                               )}
                             </div>
                             <div className="flex items-center gap-3">
-                              <span className="font-bold text-lg min-w-[60px] text-right">{entry.hours}h</span>
+                              <span className="font-bold text-lg min-w-[60px] text-right">{formatHours(Number(entry.hours))}</span>
                               <Button
                                 variant="ghost"
                                 size="icon"

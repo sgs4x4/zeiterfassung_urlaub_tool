@@ -521,7 +521,7 @@ export function VacationCalendarView({ isAdmin, showAllAbsences = false }: Vacat
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
-              {isAdmin ? (
+              {isAdmin || showAllAbsences ? (
                 monthPeople.length === 0 ? (
                   <p className="text-sm text-muted-foreground">Keine Abwesenheiten diesen Monat</p>
                 ) : (

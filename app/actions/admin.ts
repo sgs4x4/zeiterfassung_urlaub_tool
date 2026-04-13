@@ -1,7 +1,7 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { getAllUsers, getAllTimeEntries, getUserById, type EmployeeType } from "@/lib/db"
+import { getAllUsers, getAllTimeEntries, getUserById, type EmployeeType, type Weekday, type WeeklySchedule } from "@/lib/db"
 import { createClient } from "@/lib/supabase/server"
 import type { Bundesland } from "@/lib/holidays"
 import {
@@ -180,6 +180,37 @@ export async function updateUserWeeklyHours(userId: string, weeklyHours: number)
   const { error } = await supabase.from("users").update({ weekly_hours: weeklyHours }).eq("id", userId)
 
   if (error) throw error
+  return { success: true }
+}
+
+export async function updateUserWeeklySchedule(userId: string, weeklySchedule: WeeklySchedule) {
+  await requirePermission("users.manage_profile")
+
+  const sumHours = Object.values(weeklySchedule).reduce((sum, hours) => sum + hours, 0)
+  if (sumHours < 0 || sumHours > 80) {
+    throw new Error("Ungültige Wochenstunden")
+  }
+
+  for (const day of Object.values(weeklySchedule)) {
+    if (day < 0 || day > 24) {
+      throw new Error("Ungültige Tagesstunden")
+    }
+  }
+
+  const supabase = createClient()
+  const { error } = await supabase
+    .from("users")
+    .update({ weekly_schedule: weeklySchedule, weekly_hours: sumHours })
+    .eq("id", userId)
+
+  if (error) {
+    if (error.code === "PGRST204" && error.message?.includes("weekly_schedule")) {
+      throw new Error(
+        "Die Spalte weekly_schedule fehlt im aktuellen Supabase-Schema. Bitte führe die Datenbankmigration aus oder aktualisiere das Schema."
+      )
+    }
+    throw error
+  }
   return { success: true }
 }
 

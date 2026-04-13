@@ -9,7 +9,7 @@ import { getMyTimeEntries } from "@/app/actions/time-entries"
 import { getHolidaysForYear } from "@/app/actions/holidays"
 import { closeMonth, canCloseMonth, isMonthClosed } from "@/app/actions/month-closure"
 import type { TimeEntry } from "@/lib/db"
-import { cn } from "@/lib/utils"
+import { cn, formatHours } from "@/lib/utils"
 import { isHoliday, type Bundesland, type Holiday } from "@/lib/holidays"
 import { timeEntryEvents } from "@/lib/events"
 import {
@@ -265,7 +265,7 @@ export function MonthOverview({ bundesland = "BY", monthlyHours = 173 }: MonthOv
                   )}
                 >
                   <div className={cn("text-sm", isToday && "font-bold text-primary")}>{format(day, "d")}</div>
-                  {hasEntry && <div className="text-xs font-semibold text-primary mt-0.5">{dayHours.toFixed(2)}h</div>}
+                  {hasEntry && <div className="text-xs font-semibold text-primary mt-0.5">{formatHours(dayHours)}</div>}
                   {isHolidayDay && !hasEntry && (
                     <div className="text-[10px] font-medium text-primary mt-0.5">Feiertag</div>
                   )}
@@ -284,13 +284,13 @@ export function MonthOverview({ bundesland = "BY", monthlyHours = 173 }: MonthOv
                           <h4 className="font-semibold">
                             {format(day, "EEEE, d. MMMM", { locale: de })}
                           </h4>
-                          <span className="text-sm font-bold text-primary">{dayHours.toFixed(2)}h</span>
+                          <span className="text-sm font-bold text-primary">{formatHours(dayHours)}</span>
                         </div>
                         <div className="space-y-2">
                           {dayEntries.map((entry) => (
                             <div key={entry.id} className="p-2 rounded-md bg-muted/50 space-y-1">
                               <div className="flex items-center justify-between text-sm">
-                                <span className="font-medium">{Number(entry.hours).toFixed(2)}h</span>
+                                <span className="font-medium">{formatHours(Number(entry.hours))}</span>
                                 {entry.start_time && entry.end_time && (
                                   <span className="text-xs text-muted-foreground flex items-center gap-1">
                                     <Clock className="h-3 w-3" />

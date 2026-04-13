@@ -6,7 +6,9 @@ import { TimeEntries } from "@/components/time-entries"
 import { WeekOverview } from "@/components/week-overview"
 import { MonthOverview } from "@/components/month-overview"
 import { OvertimeBadge } from "@/components/overtime-badge"
-import { findOrCreateUser } from "@/lib/db"
+import { Card, CardContent } from "@/components/ui/card"
+import { findOrCreateUser, type WeeklySchedule } from "@/lib/db"
+import { formatHours } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { AppShell, MetricCard, MetricGrid, PageHero } from "@/components/layout/app-shell"
 import { CalendarDays, Clock3, ShieldCheck } from "lucide-react"
@@ -61,6 +63,15 @@ export default async function DashboardPage() {
   const { isAdmin, isReporter, canUseVacation, isVacationAdmin } = getLegacyHeaderFlags(access.profile, access.permissions)
   const monthlyHours    = dbUser.monthly_hours || 173
   const weeklyHours     = dbUser.weekly_hours || 40
+  const weeklySchedule  = dbUser.weekly_schedule || {
+    monday: 8,
+    tuesday: 8,
+    wednesday: 8,
+    thursday: 8,
+    friday: 8,
+    saturday: 0,
+    sunday: 0,
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -78,9 +89,52 @@ export default async function DashboardPage() {
         />
 
         <MetricGrid>
-          <MetricCard label="Wochenziel" value={`${weeklyHours}h`} icon={Clock3} />
-          <MetricCard label="Monatsziel" value={`${monthlyHours}h`} icon={CalendarDays} />
-          <MetricCard label="Module" value={canUseVacation ? "Zeit + Urlaub" : "Zeit"} icon={ShieldCheck} />
+          <Card className="border-border/70 bg-card/90 py-4">
+            <CardContent className="flex items-start justify-between gap-4 px-5">
+              <div className="space-y-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Ziele</p>
+                <div className="grid gap-3">
+                  <div>
+                    <p className="text-2xl font-semibold">{formatHours(weeklyHours)}</p>
+                    <p className="text-xs text-muted-foreground">Wochenziel</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-semibold">{formatHours(monthlyHours)}</p>
+                    <p className="text-xs text-muted-foreground">Monatsziel</p>
+                  </div>
+                </div>
+              </div>
+              <Clock3 className="h-5 w-5 text-primary" />
+            </CardContent>
+          </Card>
+          <OvertimeBadge />
+          <Card className="border-border/70 bg-card/90 py-4">
+            <CardContent className="px-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Sollplan</p>
+                  <p className="mt-1 text-2xl font-semibold">Woche</p>
+                </div>
+                <CalendarDays className="h-5 w-5 text-primary" />
+              </div>
+              <div className="mt-4 grid grid-cols-7 gap-1 text-center text-[11px] leading-tight">
+                {([
+                  ["monday", "Mo"],
+                  ["tuesday", "Di"],
+                  ["wednesday", "Mi"],
+                  ["thursday", "Do"],
+                  ["friday", "Fr"],
+                  ["saturday", "Sa"],
+                  ["sunday", "So"],
+                ] as const).map(([dayKey, label]) => (
+                  <div key={dayKey} className="rounded-xl bg-muted/50 py-2 px-1.5">
+                    <div className="text-[10px] font-semibold uppercase text-muted-foreground">{label}</div>
+                    <div className="mt-1 text-xs font-semibold text-foreground">{formatHours(weeklySchedule[dayKey as keyof WeeklySchedule] ?? 0)}</div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
         </MetricGrid>
 
         <div className="grid gap-6 lg:grid-cols-3">
@@ -89,8 +143,7 @@ export default async function DashboardPage() {
             <TimeEntries />
           </div>
           <div className="space-y-6">
-            <OvertimeBadge />
-            <WeekOverview weeklyHours={weeklyHours} />
+            <WeekOverview weeklyHours={weeklyHours} weeklySchedule={weeklySchedule} />
           </div>
         </div>
 

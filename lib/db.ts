@@ -10,6 +10,9 @@ export type UserCategory = "vertrieb" | "werkstatt" | "lager" | "buero" | "sonst
 
 export type VacationRestrictionDay = "montag" | "dienstag" | "mittwoch" | "donnerstag" | "freitag"
 
+export type Weekday = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday"
+export type WeeklySchedule = Record<Weekday, number>
+
 export type User = {
   id: string
   azure_id: string
@@ -22,6 +25,7 @@ export type User = {
   notify_vacation_rejected: boolean
   notify_vacation_withdrawn: boolean
   weekly_hours: number
+  weekly_schedule: WeeklySchedule | null
   monthly_hours: number
   vacation_days_per_year: number
   employee_type: EmployeeType
@@ -98,6 +102,16 @@ export async function findOrCreateUser(azureId: string, email: string, name: str
     return existingUser as User
   }
 
+  const defaultWeeklySchedule = {
+    monday: 8,
+    tuesday: 8,
+    wednesday: 8,
+    thursday: 8,
+    friday: 8,
+    saturday: 0,
+    sunday: 0,
+  }
+
   const { data: newUser, error } = await supabase
     .from("users")
     .insert({
@@ -108,6 +122,7 @@ export async function findOrCreateUser(azureId: string, email: string, name: str
       employee_type: "vollzeit",
       monthly_hours: 173,
       weekly_hours: 40,
+      weekly_schedule: defaultWeeklySchedule,
       vacation_days_per_year: 30,
     })
     .select()

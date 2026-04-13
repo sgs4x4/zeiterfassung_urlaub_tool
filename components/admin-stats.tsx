@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Users, Clock, Calendar, TrendingUp } from "lucide-react"
 import { getAdminDashboardData } from "@/app/actions/admin"
 import { format, startOfMonth, endOfMonth } from "date-fns"
+import { formatHours } from "@/lib/utils"
 
 export function AdminStats() {
   const [stats, setStats] = useState({
@@ -48,7 +49,7 @@ export function AdminStats() {
     },
     {
       title: "Gesamtstunden",
-      value: `${stats.totalHours.toFixed(2)}h`,
+      value: formatHours(stats.totalHours),
       icon: Clock,
       description: "Diesen Monat",
     },
@@ -60,7 +61,7 @@ export function AdminStats() {
     },
     {
       title: "Durchschnitt",
-      value: `${stats.avgHoursPerUser.toFixed(2)}h`,
+      value: formatHours(stats.avgHoursPerUser),
       icon: TrendingUp,
       description: "Pro Mitarbeiter",
     },
