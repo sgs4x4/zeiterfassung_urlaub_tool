@@ -18,6 +18,9 @@ yarn-error.log*
 
 # env files
 .env*
+*.pem
+*_key
+*_key.pub
 
 # vercel
 .vercel
