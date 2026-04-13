@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { createClient } from "@/lib/supabase/server"
 import { requireAnyPermission, requirePermission } from "@/lib/permissions-server"
+import { getServerSession } from "@/lib/auth"
 
 export interface Project {
   id: string
