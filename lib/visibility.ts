@@ -67,10 +67,10 @@ export function getVacationCalendarAbsenceScope(access: UserAccess): VacationAbs
   if (
     p["vacation.manage_requests"] ||
     p["vacation.manage_blocked_days"] ||
-    p["vacation.view_company_absences"]
+    p["vacation.view_company_absences"] ||
+    p["vacation.view_team_calendar"]
   ) {
     return "all"
   }
-  if (p["vacation.view_team_calendar"]) return "team"
   return null
 }

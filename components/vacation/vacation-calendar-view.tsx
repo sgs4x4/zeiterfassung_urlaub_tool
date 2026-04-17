@@ -184,18 +184,20 @@ export function VacationCalendarView({ isAdmin, showAllAbsences = false }: Vacat
   }
 
   // Collect all people with absences this month
+  const monthAbsences = absences.filter((a) => {
+    if (a.status !== "approved" && a.status !== "pending") return false
+    if (statusFilter !== "all" && a.status !== statusFilter) return false
+    try {
+      return parseLocalDate(a.start_date) <= endOfMonth(currentMonth) &&
+             parseLocalDate(a.end_date) >= startOfMonth(currentMonth)
+    } catch {
+      return false
+    }
+  })
+
   const monthPeople = (isAdmin || showAllAbsences)
     ? [...new Set(
-        absences
-          .filter((a) => a.status === "approved" || a.status === "pending")
-          .filter((a) => (statusFilter === "all" ? true : a.status === statusFilter))
-          .filter((a) => {
-            try {
-              const start = startOfMonth(currentMonth)
-              const end   = endOfMonth(currentMonth)
-              return parseLocalDate(a.start_date) <= end && parseLocalDate(a.end_date) >= start
-            } catch { return false }
-          })
+        monthAbsences
           .map((a) => a.user?.name).filter(Boolean)
       )]
     : []
@@ -522,38 +524,31 @@ export function VacationCalendarView({ isAdmin, showAllAbsences = false }: Vacat
             </CardHeader>
             <CardContent className="space-y-2">
               {isAdmin || showAllAbsences ? (
-                monthPeople.length === 0 ? (
+                monthAbsences.length === 0 ? (
                   <p className="text-sm text-muted-foreground">Keine Abwesenheiten diesen Monat</p>
                 ) : (
-                  monthPeople.map((name) => (
-                    <div key={name} className="flex items-center gap-2 text-sm">
-                      <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">
-                        {(name || "?").split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
+                  monthAbsences.map((absence) => {
+                    const name = absence.user?.name || "Unbekannt"
+                    return (
+                    <div key={absence.id} className="space-y-0.5">
+                      <div className="flex items-center gap-2 text-sm">
+                        <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">
+                          {(name || "?").split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
+                        </div>
+                        <span>{name}</span>
                       </div>
-                      <span>{name}</span>
+                      <p className="text-xs text-muted-foreground pl-8">
+                        {format(parseLocalDate(absence.start_date), "dd.MM.")} – {format(parseLocalDate(absence.end_date), "dd.MM.yyyy")}
+                        {" · "}{absence.days} Tage
+                      </p>
                     </div>
-                  ))
+                  )})
                 )
               ) : (
-                absences.filter((a) => {
-                  if (a.status !== "approved" && a.status !== "pending") return false
-                  if (statusFilter !== "all" && a.status !== statusFilter) return false
-                  try {
-                    return parseLocalDate(a.start_date) <= endOfMonth(currentMonth) &&
-                           parseLocalDate(a.end_date)   >= startOfMonth(currentMonth)
-                  } catch { return false }
-                }).length === 0 ? (
+                monthAbsences.length === 0 ? (
                   <p className="text-sm text-muted-foreground">Keine Abwesenheiten diesen Monat</p>
                 ) : (
-                  absences
-                    .filter((a) => {
-                      if (a.status !== "approved" && a.status !== "pending") return false
-                      if (statusFilter !== "all" && a.status !== statusFilter) return false
-                      try {
-                        return parseLocalDate(a.start_date) <= endOfMonth(currentMonth) &&
-                               parseLocalDate(a.end_date)   >= startOfMonth(currentMonth)
-                      } catch { return false }
-                    })
+                  monthAbsences
                     .map((a) => (
                       <div key={a.id} className="space-y-0.5">
                         <div className="flex items-center gap-1.5">

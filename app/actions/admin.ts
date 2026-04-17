@@ -13,6 +13,28 @@ import {
 import type { AccessProfile, AppPermission } from "@/lib/permissions"
 import { canActorManageTargetTime, canActorViewTargetTime, filterUsersVisibleInAdmin } from "@/lib/visibility"
 
+function assertMonthlyWeeklyConsistency(monthlyHours: number, weeklyHours: number) {
+  if (monthlyHours < 0 || weeklyHours < 0) {
+    throw new Error("Ungültige Sollstunden")
+  }
+
+  if (weeklyHours === 0) {
+    if (monthlyHours !== 0) {
+      throw new Error("Bei 0 Wochenstunden müssen die Monatsstunden ebenfalls 0 sein.")
+    }
+    return
+  }
+
+  const minMonthly = weeklyHours * 4
+  const maxMonthly = weeklyHours * 5
+
+  if (monthlyHours < minMonthly || monthlyHours > maxMonthly) {
+    throw new Error(
+      `Monatsstunden passen nicht zum Wochenplan. Bei ${weeklyHours.toFixed(2)} Wochenstunden sind ${minMonthly.toFixed(2)} bis ${maxMonthly.toFixed(2)} Monatsstunden plausibel.`
+    )
+  }
+}
+
 export async function checkIsAdmin(): Promise<boolean> {
   const access = await getCurrentUserAccess()
   return access.profile === "admin"
@@ -186,21 +208,44 @@ export async function updateUserWeeklyHours(userId: string, weeklyHours: number)
 export async function updateUserWeeklySchedule(userId: string, weeklySchedule: WeeklySchedule) {
   await requirePermission("users.manage_profile")
 
-  const sumHours = Object.values(weeklySchedule).reduce((sum, hours) => sum + hours, 0)
+  const normalizedSchedule = Object.entries(weeklySchedule).reduce((acc, [day, value]) => {
+    const numericValue = Number(value)
+    if (!Number.isFinite(numericValue)) {
+      throw new Error("Ungültige Tagesstunden")
+    }
+    return {
+      ...acc,
+      [day]: numericValue,
+    }
+  }, {} as WeeklySchedule)
+
+  const sumHours = Object.values(normalizedSchedule).reduce((sum, hours) => sum + hours, 0)
   if (sumHours < 0 || sumHours > 80) {
     throw new Error("Ungültige Wochenstunden")
   }
 
-  for (const day of Object.values(weeklySchedule)) {
+  for (const day of Object.values(normalizedSchedule)) {
     if (day < 0 || day > 24) {
       throw new Error("Ungültige Tagesstunden")
     }
   }
 
   const supabase = createClient()
+  const { data: currentUser, error: currentUserError } = await supabase
+    .from("users")
+    .select("monthly_hours")
+    .eq("id", userId)
+    .single()
+
+  if (currentUserError || !currentUser) {
+    throw new Error("Benutzer nicht gefunden")
+  }
+
+  assertMonthlyWeeklyConsistency(Number(currentUser.monthly_hours || 0), sumHours)
+
   const { error } = await supabase
     .from("users")
-    .update({ weekly_schedule: weeklySchedule, weekly_hours: sumHours })
+    .update({ weekly_schedule: normalizedSchedule, weekly_hours: sumHours })
     .eq("id", userId)
 
   if (error) {
@@ -222,6 +267,18 @@ export async function updateUserMonthlyHours(userId: string, monthlyHours: numbe
   }
 
   const supabase = createClient()
+  const { data: currentUser, error: currentUserError } = await supabase
+    .from("users")
+    .select("weekly_hours")
+    .eq("id", userId)
+    .single()
+
+  if (currentUserError || !currentUser) {
+    throw new Error("Benutzer nicht gefunden")
+  }
+
+  assertMonthlyWeeklyConsistency(monthlyHours, Number(currentUser.weekly_hours || 0))
+
   const { error } = await supabase.from("users").update({ monthly_hours: monthlyHours }).eq("id", userId)
 
   if (error) throw error

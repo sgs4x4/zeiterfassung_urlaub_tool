@@ -206,18 +206,18 @@ export function MonthOverview({ bundesland = "BY", monthlyHours = 173 }: MonthOv
         {/* Statistik */}
         <div className="grid grid-cols-3 gap-4 p-4 bg-muted/50 rounded-lg">
           <div className="text-center">
-            <div className="text-2xl font-bold">{totalHours.toFixed(2)}h</div>
+            <div className="text-2xl font-bold">{totalHours.toFixed(2)} Std.</div>
             <div className="text-xs text-muted-foreground">Erfasst</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold">{expectedHours}h</div>
+            <div className="text-2xl font-bold">{expectedHours} Std.</div>
             <div className="text-xs text-muted-foreground">Monatssoll</div>
           </div>
           <div className="text-center">
             <div
               className={cn("text-2xl font-bold", totalHours >= expectedHours ? "text-green-500" : "text-orange-500")}
             >
-              {(totalHours - expectedHours).toFixed(2)}h
+              {(totalHours - expectedHours).toFixed(2)} Std.
             </div>
             <div className="text-xs text-muted-foreground">Differenz</div>
           </div>
@@ -266,8 +266,10 @@ export function MonthOverview({ bundesland = "BY", monthlyHours = 173 }: MonthOv
                 >
                   <div className={cn("text-sm", isToday && "font-bold text-primary")}>{format(day, "d")}</div>
                   {hasEntry && <div className="text-xs font-semibold text-primary mt-0.5">{formatHours(dayHours)}</div>}
-                  {isHolidayDay && !hasEntry && (
-                    <div className="text-[10px] font-medium text-primary mt-0.5">Feiertag</div>
+                  {isHolidayDay && (
+                    <div className="text-[10px] font-medium text-primary mt-0.5 truncate" title={holidayName || "Feiertag"}>
+                      {holidayName || "Feiertag"}
+                    </div>
                   )}
                 </div>
               )

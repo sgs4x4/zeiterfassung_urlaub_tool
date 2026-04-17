@@ -506,6 +506,7 @@ export async function getAllAbsences(): Promise<Absence[]> {
 function mapAbsenceRows(data: unknown[] | null): Absence[] {
   return (data || []).map((a: any) => ({
     ...a,
+    reason: null,
     user: a.users,
   })) as Absence[]
 }

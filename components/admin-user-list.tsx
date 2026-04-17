@@ -851,15 +851,19 @@ export function AdminUserList({
             </div>
             <div className="space-y-2">
               <Label>Wochenplan Mo–So</Label>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-border/70 bg-muted/20 p-3">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {WEEKDAYS.map((weekday) => (
-                  <div key={weekday} className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">{WEEKDAY_LABELS[weekday]}</Label>
+                    <div key={weekday} className="space-y-1.5 rounded-md border border-border/60 bg-background p-2.5">
+                      <div className="flex items-center justify-center">
+                        <Label className="text-xs font-semibold tracking-wide text-foreground">{WEEKDAY_LABELS[weekday]}</Label>
+                      </div>
                     <Input
                       type="text"
                       inputMode="decimal"
                       pattern="[0-9:,]*"
                       placeholder="8:00"
+                      className="h-8 text-center text-sm font-medium tabular-nums"
                       value={weeklyScheduleInputs[weekday] ?? "0:00"}
                       onChange={(e) => setWeeklyScheduleInputs((prev) => ({
                         ...prev,
@@ -875,9 +879,10 @@ export function AdminUserList({
                     />
                   </div>
                 ))}
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Summe: {formatHours(Object.values(WEEKDAYS).reduce((sum, day) => sum + parseHoursInput(weeklyScheduleInputs[day] ?? "0"), 0))} / Woche
+              <p className="text-xs text-muted-foreground mt-1 rounded-md bg-muted/40 px-2.5 py-1.5 inline-flex items-center">
+                Summe: <span className="font-semibold text-foreground ml-1">{formatHours(Object.values(WEEKDAYS).reduce((sum, day) => sum + parseHoursInput(weeklyScheduleInputs[day] ?? "0"), 0))}</span> / Woche
               </p>
               {employeeSaveMessage && (
                 <Alert variant={employeeSaveStatus === "error" ? "destructive" : "default"} className="mt-2">
