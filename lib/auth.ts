@@ -1,5 +1,12 @@
 import { getServerSession as getNextAuthSession, type NextAuthOptions } from "next-auth/next"
 
+// SECURITY NOTE (25.08.2026): next-auth@4.24.15 pinnt @auth/core als optionalen Peer
+// fest auf 0.34.3 – diese Version enthält bekannte kritische CVEs (GHSA-7rqj-j65f-68wh,
+// GHSA-xmf8-cvqr-rfgj, GHSA-x445-f3h2-j279). Ein Fix ohne next-auth-Major-Upgrade auf v5
+// (Auth.js) ist nicht möglich. Akzeptiertes Risiko, weil hier weder ein DB-Adapter noch
+// EmailProvider genutzt wird (nur Azure-AD-OAuth, siehe providers unten) – die
+// betroffenen @auth/core-Codepfade werden also nicht ausgeführt. Bei Erweiterung um
+// Adapter/EmailProvider: erst auf next-auth v5 migrieren.
 export const authOptions: NextAuthOptions = {
   providers: [
     {

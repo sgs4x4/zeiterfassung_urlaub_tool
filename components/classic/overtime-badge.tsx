@@ -1,36 +1,11 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Clock, TrendingUp, TrendingDown, Minus } from "lucide-react"
-import { getOvertimeBalance } from "@/app/actions/time-entries"
+import { useOvertimeBalance } from "@/hooks/queries/use-overtime-balance"
 
 export function OvertimeBadge() {
-  const [overtime, setOvertime] = useState<number | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-
-  const loadOvertime = async () => {
-    try {
-      const balance = await getOvertimeBalance()
-      setOvertime(balance)
-    } catch (error) {
-      console.error("Error loading overtime:", error)
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadOvertime()
-
-    const interval = setInterval(() => {
-      if (!document.hidden) {
-        loadOvertime()
-      }
-    }, 30000) // Update alle 30 Sekunden
-
-    return () => clearInterval(interval)
-  }, [])
+  const { data: overtime, isLoading } = useOvertimeBalance()
 
   if (isLoading) {
     return (
@@ -48,8 +23,8 @@ export function OvertimeBadge() {
     )
   }
 
-  const isPositive = overtime && overtime > 0
-  const isNegative = overtime && overtime < 0
+  const isPositive = overtime !== undefined && overtime > 0
+  const isNegative = overtime !== undefined && overtime < 0
   const isZero = overtime === 0
 
   return (
@@ -71,7 +46,7 @@ export function OvertimeBadge() {
                 isPositive ? "text-green-500" : isNegative ? "text-red-500" : "text-muted-foreground"
               }`}
             >
-              {overtime !== null ? (overtime > 0 ? "+" : "") + overtime.toFixed(2) : "-"}
+              {overtime !== undefined ? (overtime > 0 ? "+" : "") + overtime.toFixed(2) : "-"}
             </span>
             <span className="text-lg text-muted-foreground">h</span>
           </div>

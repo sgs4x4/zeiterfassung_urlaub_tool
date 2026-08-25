@@ -1,15 +1,13 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TrendingUp } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
-import { getMyTimeEntries } from "@/app/actions/time-entries"
 import { format, startOfWeek, endOfWeek, eachDayOfInterval, isSameDay } from "date-fns"
 import { de } from "date-fns/locale"
 import type { TimeEntry, WeeklySchedule } from "@/lib/db"
 import { formatHours } from "@/lib/utils"
-import { timeEntryEvents } from "@/lib/events"
+import { useTimeEntries } from "@/hooks/queries/use-time-entries"
 
 const WEEKDAY_LABELS = {
   monday: "Mo",
@@ -49,62 +47,28 @@ export function WeekOverview({
   weeklySchedule?: WeeklySchedule
 }) {
   const schedule = weeklySchedule ?? DEFAULT_WEEKLY_SCHEDULE
-  const [weekData, setWeekData] = useState<{ day: string; date: Date; hours: number; target: number }[]>([])
-  const [isLoading, setIsLoading] = useState(true)
 
-  const loadWeekData = async () => {
-    const now = new Date()
-    const weekStart = startOfWeek(now, { weekStartsOn: 1 })
-    const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
+  const now = new Date()
+  const weekStart = startOfWeek(now, { weekStartsOn: 1 })
+  const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
 
-    const entries = await getMyTimeEntries(format(weekStart, "yyyy-MM-dd"), format(weekEnd, "yyyy-MM-dd"))
+  // Geteilter Query-Cache mit der BETA-Ansicht: kein eigenes Polling, kein Event-Bus.
+  const { data: entries = [], isLoading } = useTimeEntries(
+    format(weekStart, "yyyy-MM-dd"),
+    format(weekEnd, "yyyy-MM-dd"),
+  )
 
-    const days = eachDayOfInterval({ start: weekStart, end: weekEnd })
-    const data = days.map((date) => {
-      const entry = entries.find((e: TimeEntry) => isSameDay(new Date(e.date), date))
-      const weekdayKey = WEEKDAY_INDEX_TO_KEY[date.getDay()]
-      const target = schedule[weekdayKey] ?? (date.getDay() >= 1 && date.getDay() <= 5 ? weeklyHours / 5 : 0)
-      return {
-        day: format(date, "EEE", { locale: de }),
-        date,
-        hours: entry ? Number(entry.hours) : 0,
-        target,
-      }
-    })
-
-    setWeekData(data)
-    setIsLoading(false)
-  }
-
-  useEffect(() => {
-    loadWeekData()
-
-    // Subscribe to time entry events for instant updates
-    const unsubscribe = timeEntryEvents.subscribe(() => {
-      loadWeekData()
-    })
-
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        loadWeekData()
-      }
+  const weekData = eachDayOfInterval({ start: weekStart, end: weekEnd }).map((date) => {
+    const entry = entries.find((e: TimeEntry) => isSameDay(new Date(e.date), date))
+    const weekdayKey = WEEKDAY_INDEX_TO_KEY[date.getDay() as keyof typeof WEEKDAY_INDEX_TO_KEY]
+    const target = schedule[weekdayKey] ?? (date.getDay() >= 1 && date.getDay() <= 5 ? weeklyHours / 5 : 0)
+    return {
+      day: format(date, "EEE", { locale: de }),
+      date,
+      hours: entry ? Number(entry.hours) : 0,
+      target,
     }
-
-    document.addEventListener("visibilitychange", handleVisibilityChange)
-
-    // Poll for updates every 30 seconds when tab is visible (fallback)
-    const interval = setInterval(() => {
-      if (!document.hidden) {
-        loadWeekData()
-      }
-    }, 30000)
-
-    return () => {
-      unsubscribe()
-      document.removeEventListener("visibilitychange", handleVisibilityChange)
-      clearInterval(interval)
-    }
-  }, [])
+  })
 
   const totalHours = weekData.reduce((sum, day) => sum + day.hours, 0)
   const progress = Math.min((totalHours / weeklyHours) * 100, 100)

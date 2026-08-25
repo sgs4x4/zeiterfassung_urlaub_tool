@@ -9,29 +9,26 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { CalendarIcon, Clock, Save, Lock } from "lucide-react"
-import { saveTimeEntry } from "@/app/actions/time-entries"
-import { format, subDays } from "date-fns"
+import { format, startOfDay, startOfWeek, subDays } from "date-fns"
 import { de } from "date-fns/locale"
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
-import { useRouter } from "next/navigation"
-import { timeEntryEvents } from "@/lib/events"
 import { getUserProjects, type Project } from "@/app/actions/projects"
 import { Switch } from "@/components/ui/switch"
 import { isMonthClosed } from "@/app/actions/month-closure"
+import { useSaveTimeEntry } from "@/hooks/queries/use-save-time-entry"
 
 interface DayEntryFormProps {
   isAdmin?: boolean
 }
 
 export function DayEntryForm({ isAdmin = false }: DayEntryFormProps) {
-  const router = useRouter()
+  const saveEntry = useSaveTimeEntry()
   const [date, setDate] = useState<Date>(new Date())
   const [hours, setHours] = useState("")
   const [description, setDescription] = useState("")
   const [projectId, setProjectId] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedMonthClosed, setSelectedMonthClosed] = useState(false)
@@ -80,9 +77,22 @@ export function DayEntryForm({ isAdmin = false }: DayEntryFormProps) {
     checkMonthClosed()
   }, [date])
 
-  const minDate = isAdmin ? undefined : subDays(new Date(), 5)
+  // Frühestes wählbares Datum: laufende Woche oder 5 Tage zurück – je nachdem,
+  // was weiter zurückreicht. Muss zur Serverregel in app/actions/time-entries.ts passen.
+  // startOfDay, damit der Grenztag selbst noch wählbar bleibt (sonst würde ihn die
+  // Uhrzeit-Komponente fälschlich aussperren).
+  const minDate = isAdmin
+    ? undefined
+    : new Date(
+        Math.min(
+          startOfWeek(new Date(), { weekStartsOn: 1 }).getTime(),
+          startOfDay(subDays(new Date(), 5)).getTime(),
+        ),
+      )
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const isLoading = saveEntry.isPending
+
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
 
     if (selectedMonthClosed && !isAdmin) {
@@ -90,36 +100,32 @@ export function DayEntryForm({ isAdmin = false }: DayEntryFormProps) {
       return
     }
 
-    setIsLoading(true)
     setMessage(null)
 
-    try {
-      const formData = new FormData()
-      formData.set("date", format(date, "yyyy-MM-dd"))
-      formData.set("hours", hours)
-      formData.set("description", description)
-      formData.set("project_id", projectId)
+    const formData = new FormData()
+    formData.set("date", format(date, "yyyy-MM-dd"))
+    formData.set("hours", hours)
+    formData.set("description", description)
+    formData.set("project_id", projectId)
 
-      if (useTimeRange && startTime && endTime) {
-        formData.set("start_time", startTime)
-        formData.set("end_time", endTime)
-      }
-
-      await saveTimeEntry(formData)
-      setMessage({ type: "success", text: "Zeiteintrag gespeichert!" })
-      setHours("")
-      setDescription("")
-      setProjectId("")
-      setStartTime("")
-      setEndTime("")
-      // Trigger update for all listening components
-      timeEntryEvents.emit()
-      router.refresh()
-    } catch (error) {
-      setMessage({ type: "error", text: error instanceof Error ? error.message : "Fehler beim Speichern" })
-    } finally {
-      setIsLoading(false)
+    if (useTimeRange && startTime && endTime) {
+      formData.set("start_time", startTime)
+      formData.set("end_time", endTime)
     }
+
+    saveEntry.mutate(formData, {
+      onSuccess: () => {
+        setMessage({ type: "success", text: "Zeiteintrag gespeichert!" })
+        setHours("")
+        setDescription("")
+        setProjectId(projects.length === 1 ? projects[0].id : "")
+        setStartTime("")
+        setEndTime("")
+      },
+      onError: (error) => {
+        setMessage({ type: "error", text: error instanceof Error ? error.message : "Fehler beim Speichern" })
+      },
+    })
   }
 
   return (
@@ -163,7 +169,9 @@ export function DayEntryForm({ isAdmin = false }: DayEntryFormProps) {
                   />
                 </PopoverContent>
               </Popover>
-              {!isAdmin && <p className="text-xs text-muted-foreground">Maximal 5 Tage rückwirkend möglich</p>}
+              {!isAdmin && (
+                <p className="text-xs text-muted-foreground">Laufende Woche oder 5 Tage rückwirkend</p>
+              )}
             </div>
 
             <div className="space-y-2">

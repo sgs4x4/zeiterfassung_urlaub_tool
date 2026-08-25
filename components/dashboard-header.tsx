@@ -11,11 +11,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { signOut } from "next-auth/react"
-import { LogOut, User, Shield, CalendarDays, Menu, Settings } from "lucide-react"
+import { ArrowLeftRight, LogOut, User, Shield, CalendarDays, Menu, Settings } from "lucide-react"
 import Image from "next/image"
 import Link from "next/link"
+import { useTransition } from "react"
+import { toast } from "sonner"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
+import { setDashboardView } from "@/app/actions/dashboard-view"
+import type { DashboardView } from "@/lib/dashboard-view"
 
 interface DashboardHeaderProps {
   user: {
@@ -28,12 +32,34 @@ interface DashboardHeaderProps {
   isReporter?: boolean
   canUseVacation?: boolean
   isVacationAdmin?: boolean
+  /** Nur auf der Dashboard-Seite gesetzt – nur dort gibt es zwei Ansichten. */
+  dashboardView?: DashboardView
 }
 
-export function DashboardHeader({ user, isAdmin, isReporter, canUseVacation, isVacationAdmin }: DashboardHeaderProps) {
+export function DashboardHeader({
+  user,
+  isAdmin,
+  isReporter,
+  canUseVacation,
+  isVacationAdmin,
+  dashboardView,
+}: DashboardHeaderProps) {
   const canSeeAdmin = isAdmin || isReporter || isVacationAdmin
   const canManageVacation = isAdmin || isVacationAdmin
   const canSeeVacation = canUseVacation || canManageVacation
+  const router = useRouter()
+  const [isSwitchingView, startSwitchView] = useTransition()
+
+  const switchView = () => {
+    if (!dashboardView) return
+    const target: DashboardView = dashboardView === "beta" ? "classic" : "beta"
+    startSwitchView(async () => {
+      await setDashboardView(target)
+      router.refresh()
+      toast.success(target === "beta" ? "Neue Ansicht aktiviert" : "Klassische Ansicht aktiviert")
+    })
+  }
+
   const pathname = usePathname()
   const isVacationArea = pathname.startsWith("/urlaub")
   const isAdminArea = pathname.startsWith("/admin")
@@ -215,6 +241,22 @@ export function DashboardHeader({ user, isAdmin, isReporter, canUseVacation, isV
                     Einstellungen
                   </Link>
                 </DropdownMenuItem>
+                {dashboardView && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={(event) => {
+                        // Menü offen halten, bis der Server-Roundtrip durch ist.
+                        event.preventDefault()
+                        switchView()
+                      }}
+                      disabled={isSwitchingView}
+                    >
+                      <ArrowLeftRight className="mr-2 h-4 w-4" />
+                      {dashboardView === "beta" ? "Zur klassischen Ansicht" : "Neue Ansicht (BETA)"}
+                    </DropdownMenuItem>
+                  </>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => signOut({ callbackUrl: "/login" })}>
                   <LogOut className="mr-2 h-4 w-4" />

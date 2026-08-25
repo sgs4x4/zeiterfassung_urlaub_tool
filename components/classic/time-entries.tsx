@@ -1,75 +1,37 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { toast } from "sonner"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Calendar, Trash2, FileText, Clock, ChevronDown, ChevronUp } from "lucide-react"
-import { getMyTimeEntries, removeTimeEntry } from "@/app/actions/time-entries"
 import { getProjects, type Project } from "@/app/actions/projects"
 import { format, startOfMonth, endOfMonth } from "date-fns"
 import { formatHours } from "@/lib/utils"
 import { de } from "date-fns/locale"
 import type { TimeEntry } from "@/lib/db"
-import { useRouter } from "next/navigation"
-import { timeEntryEvents } from "@/lib/events"
+import { useTimeEntries } from "@/hooks/queries/use-time-entries"
+import { useDeleteTimeEntry } from "@/hooks/queries/use-delete-time-entry"
 
 export function TimeEntries() {
-  const router = useRouter()
-  const [entries, setEntries] = useState<TimeEntry[]>([])
-  const [projects, setProjects] = useState<Project[]>([])
-  const [isLoading, setIsLoading] = useState(true)
   const [showAllEntries, setShowAllEntries] = useState(false)
 
-  const loadEntries = async () => {
-    const now = new Date()
-    const start = format(startOfMonth(now), "yyyy-MM-dd")
-    const end = format(endOfMonth(now), "yyyy-MM-dd")
-    const data = await getMyTimeEntries(start, end)
-    setEntries(data)
-    setIsLoading(false)
-  }
+  const now = new Date()
+  // Geteilter Query-Cache mit der BETA-Ansicht: kein eigenes Polling, kein Event-Bus.
+  const { data: entries = [], isLoading } = useTimeEntries(
+    format(startOfMonth(now), "yyyy-MM-dd"),
+    format(endOfMonth(now), "yyyy-MM-dd"),
+  )
+  const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: getProjects })
+  const deleteTimeEntry = useDeleteTimeEntry()
 
-  const loadProjects = async () => {
-    const data = await getProjects()
-    setProjects(data)
-  }
-
-  useEffect(() => {
-    loadEntries()
-    loadProjects()
-
-    // Subscribe to time entry events for instant updates
-    const unsubscribe = timeEntryEvents.subscribe(() => {
-      loadEntries()
-    })
-
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        loadEntries()
-      }
-    }
-
-    document.addEventListener("visibilitychange", handleVisibilityChange)
-
-    const interval = setInterval(() => {
-      if (!document.hidden) {
-        loadEntries()
-      }
-    }, 30000) // Reduced to 30 seconds since we have instant events
-
-    return () => {
-      unsubscribe()
-      document.removeEventListener("visibilitychange", handleVisibilityChange)
-      clearInterval(interval)
-    }
-  }, [])
-
-  const handleDelete = async (id: string) => {
+  const handleDelete = (id: string) => {
     if (!confirm("Eintrag wirklich löschen?")) return
-    await removeTimeEntry(id)
-    loadEntries()
-    timeEntryEvents.emit() // Trigger update for other components
-    router.refresh()
+    deleteTimeEntry.mutate(id, {
+      onSuccess: () => toast.success("Eintrag gelöscht"),
+      onError: (error) => toast.error(error instanceof Error ? error.message : "Fehler beim Löschen"),
+    })
   }
 
   const formatDate = (dateStr: string) => {
@@ -94,13 +56,13 @@ export function TimeEntries() {
 
   const getProjectName = (projectId: string | null) => {
     if (!projectId) return null
-    const project = projects.find((p) => p.id === projectId)
+    const project = projects.find((p: Project) => p.id === projectId)
     return project?.name || null
   }
 
   const getProjectColor = (projectId: string | null) => {
     if (!projectId) return null
-    const project = projects.find((p) => p.id === projectId)
+    const project = projects.find((p: Project) => p.id === projectId)
     return project?.color || null
   }
 
