@@ -19,6 +19,13 @@ import { getCurrentUserAccess, requirePermission } from "@/lib/permissions-serve
 import { getVacationCalendarAbsenceScope } from "@/lib/visibility"
 import { getHolidaysForYear } from "@/app/actions/holidays"
 import { recordAudit } from "@/lib/audit"
+// Konstanten/Typen liegen in lib/absence-types.ts: "use server"-Dateien dürfen ausschließlich
+// async Funktionen exportieren.
+import {
+  ABSENCE_TYPE_LABELS,
+  HALF_DAY_ABSENCE_TYPES as HALF_DAY_TYPES,
+  type AbsenceType,
+} from "@/lib/absence-types"
 import type { Bundesland } from "@/lib/holidays"
 
 const ADMIN_EMAILS = [
@@ -26,39 +33,6 @@ const ADMIN_EMAILS = [
   "cedric.thielecke@sgs4x4.de",
   "Christoph.Thielecke@sgs4x4.de",
 ]
-
-export type AbsenceType =
-  | "vacation"
-  | "sick"
-  | "other"
-  | "overtime_compensation"
-  | "special_leave"
-  | "unpaid_leave"
-
-/**
- * Abwesenheitsarten, die das Urlaubskontingent NICHT belasten. Sie reduzieren zwar wie Urlaub
- * das taggenaue Soll (es besteht keine Arbeitspflicht), werden aber nicht gegen die Urlaubstage
- * gerechnet – siehe getVacationBalance und getAdminDashboardData, die nur type='vacation' zählen.
- */
-export const NON_VACATION_ABSENCE_TYPES: AbsenceType[] = [
-  "sick",
-  "other",
-  "overtime_compensation",
-  "special_leave",
-  "unpaid_leave",
-]
-
-/** Arten, bei denen ein halber Tag fachlich sinnvoll ist (Krankheit wird tageweise erfasst). */
-const HALF_DAY_TYPES: AbsenceType[] = ["vacation", "special_leave", "overtime_compensation"]
-
-export const ABSENCE_TYPE_LABELS: Record<AbsenceType, string> = {
-  vacation: "Urlaub",
-  sick: "Krankheit",
-  special_leave: "Sonderurlaub",
-  unpaid_leave: "Unbezahlte Freistellung",
-  overtime_compensation: "Überstundenausgleich",
-  other: "Sonstiges",
-}
 
 export type Absence = {
   id: string

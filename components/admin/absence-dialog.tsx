@@ -8,10 +8,9 @@ import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { createAbsenceForUser, ABSENCE_TYPE_LABELS, type AbsenceType } from "@/app/actions/absences"
+import { createAbsenceForUser } from "@/app/actions/absences"
+import { ABSENCE_TYPE_LABELS, HALF_DAY_ABSENCE_TYPES, type AbsenceType } from "@/lib/absence-types"
 import type { User } from "@/lib/db"
-
-const HALF_DAY_TYPES: AbsenceType[] = ["vacation", "special_leave", "overtime_compensation"]
 
 const TYPE_HINTS: Partial<Record<AbsenceType, string>> = {
   vacation: "Wird vom Urlaubskontingent abgezogen.",
@@ -58,7 +57,7 @@ export function AbsenceDialog({
     setError(null)
   }, [user])
 
-  const supportsHalfDay = HALF_DAY_TYPES.includes(type)
+  const supportsHalfDay = HALF_DAY_ABSENCE_TYPES.includes(type)
 
   const handleSave = async () => {
     if (!user) return
@@ -100,7 +99,7 @@ export function AbsenceDialog({
               value={type}
               onValueChange={(v) => {
                 setType(v as AbsenceType)
-                if (!HALF_DAY_TYPES.includes(v as AbsenceType)) setDayPart("full")
+                if (!HALF_DAY_ABSENCE_TYPES.includes(v as AbsenceType)) setDayPart("full")
               }}
             >
               <SelectTrigger>
