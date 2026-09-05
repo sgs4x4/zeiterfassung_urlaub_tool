@@ -11,9 +11,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -26,80 +23,24 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
-import { Users, CalendarIcon, ChevronRight, ChevronDown, ClipboardList, Info, Search, MoreHorizontal, ArrowUpDown, BriefcaseBusiness, TimerReset, Tags, Plane, FolderTree, MapPinned, SlidersHorizontal, X, TrendingUp, TrendingDown, Minus } from "lucide-react"
-import {
-  getAdminDashboardData,
-  getUserAccessConfig,
-  saveUserAccessConfig,
-  updateUserEmployment,
-  updateUserBundesland,
-  updateUserCategory,
-  updateUserVacationDays,
-} from "@/app/actions/admin"
+import { Users, Clock3, CalendarDays, CalendarIcon, ChevronRight, ChevronDown, ClipboardList, Info, Search, MoreHorizontal, ArrowUpDown, BriefcaseBusiness, TimerReset, Tags, Plane, FolderTree, MapPinned, SlidersHorizontal, X, TrendingUp, TrendingDown, Minus } from "lucide-react"
+import { getAdminDashboardData } from "@/app/actions/admin"
+import { ExportButton } from "@/components/export-button"
 import { OvertimeAccountDialog } from "@/components/admin/overtime-account-dialog"
-import { getAllProjects, getUserProjectIds, assignProjectsToUser, type Project } from "@/app/actions/projects"
-import { type User, type EmployeeType, type UserCategory, type Weekday, type WeeklySchedule, EMPLOYEE_TYPE_DEFAULTS, USER_CATEGORY_LABELS } from "@/lib/db"
-import { buildPermissionMap, type AccessProfile, type AppPermission, type PermissionGroup } from "@/lib/permissions"
+import { EmploymentDialog } from "@/components/admin/employment-dialog"
+import { AccessDialog } from "@/components/admin/access-dialog"
+import { AbsenceDialog } from "@/components/admin/absence-dialog"
+import {
+  BundeslandDialog,
+  CategoryDialog,
+  ProjectsDialog,
+  VacationDaysDialog,
+} from "@/components/admin/user-field-dialogs"
+import { type User, type EmployeeType, type UserCategory, USER_CATEGORY_LABELS } from "@/lib/db"
 import { formatHours } from "@/lib/utils"
-
-const WEEKDAYS: Weekday[] = [
-  "monday",
-  "tuesday",
-  "wednesday",
-  "thursday",
-  "friday",
-  "saturday",
-  "sunday",
-]
-
-const WEEKDAY_LABELS: Record<Weekday, string> = {
-  monday: "Mo",
-  tuesday: "Di",
-  wednesday: "Mi",
-  thursday: "Do",
-  friday: "Fr",
-  saturday: "Sa",
-  sunday: "So",
-}
-
-const DEFAULT_WEEKLY_SCHEDULE: WeeklySchedule = {
-  monday: 8,
-  tuesday: 8,
-  wednesday: 8,
-  thursday: 8,
-  friday: 8,
-  saturday: 0,
-  sunday: 0,
-}
-
-const DEFAULT_WEEKLY_SCHEDULE_INPUTS: Record<Weekday, string> = WEEKDAYS.reduce((acc, day) => ({
-  ...acc,
-  [day]: `${Math.floor(DEFAULT_WEEKLY_SCHEDULE[day])}:${String(Math.round((DEFAULT_WEEKLY_SCHEDULE[day] % 1) * 60)).padStart(2, "0")}`,
-}), {} as Record<Weekday, string>)
-
-function formatHoursInput(value: number) {
-  const hours = Math.floor(value)
-  const minutes = Math.round((value - hours) * 60)
-  return `${hours}:${String(minutes).padStart(2, "0")}`
-}
-
-function parseHoursInput(value: string) {
-  const normalized = value.replace(",", ".").trim()
-  if (normalized.includes(":")) {
-    const [hoursStr, minutesStr] = normalized.split(":")
-    const hours = Number.parseInt(hoursStr, 10)
-    const minutes = Number.parseInt(minutesStr, 10)
-    if (!Number.isNaN(hours) && !Number.isNaN(minutes) && minutes >= 0 && minutes < 60) {
-      return hours + minutes / 60
-    }
-  }
-  const numberValue = Number.parseFloat(normalized)
-  return Number.isNaN(numberValue) ? 0 : numberValue
-}
 
 import { format, startOfMonth, endOfMonth, subMonths } from "date-fns"
 import { de } from "date-fns/locale"
-import { BUNDESLAENDER, type Bundesland } from "@/lib/holidays"
 import Link from "next/link"
 import { ShieldCheck } from "lucide-react"
 
@@ -139,33 +80,16 @@ export function AdminUserList({
   const [sortBy, setSortBy] = useState<"name" | "hours" | "vacation" | "overtime">("name")
 
   const [editingEmployee, setEditingEmployee] = useState<User | null>(null)
-  const [employeeTypeValue, setEmployeeTypeValue] = useState<EmployeeType>("vollzeit")
-  const [monthlyHoursValue, setMonthlyHoursValue] = useState("")
-  const [weeklyScheduleValue, setWeeklyScheduleValue] = useState<WeeklySchedule>(DEFAULT_WEEKLY_SCHEDULE)
-  const [weeklyScheduleInputs, setWeeklyScheduleInputs] = useState<Record<Weekday, string>>(DEFAULT_WEEKLY_SCHEDULE_INPUTS)
-  // "Gültig ab": ab wann der neue Vertrag gilt. Rückwirkend erlaubt (Korrektur), in die Zukunft
-  // nicht (siehe updateUserEmployment in app/actions/admin.ts) – Default ist deshalb heute.
-  const [employeeEffectiveFrom, setEmployeeEffectiveFrom] = useState<Date>(new Date())
-  const [employeeSaveStatus, setEmployeeSaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle")
-  const [employeeSaveMessage, setEmployeeSaveMessage] = useState<string | null>(null)
 
   const [editingBundesland, setEditingBundesland] = useState<User | null>(null)
-  const [bundeslandValue, setBundeslandValue] = useState<Bundesland>("BY")
 
   const [editingProjects, setEditingProjects] = useState<User | null>(null)
-  const [allProjects, setAllProjects] = useState<Project[]>([])
-  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
 
   const [editingCategory, setEditingCategory] = useState<User | null>(null)
-  const [categoryValue, setCategoryValue] = useState<UserCategory>("sonstiges")
   const [editingVacationDays, setEditingVacationDays] = useState<User | null>(null)
-  const [vacationDaysValue, setVacationDaysValue] = useState("30")
   const [overtimeAccountUser, setOvertimeAccountUser] = useState<User | null>(null)
+  const [absenceUser, setAbsenceUser] = useState<User | null>(null)
   const [editingAccessUser, setEditingAccessUser] = useState<User | null>(null)
-  const [accessProfileValue, setAccessProfileValue] = useState<AccessProfile>("employee")
-  const [permissionValues, setPermissionValues] = useState<Partial<Record<AppPermission, boolean>>>({})
-  const [permissionGroups, setPermissionGroups] = useState<PermissionGroup[]>([])
-  const [isSavingAccess, setIsSavingAccess] = useState(false)
 
   const canOpenManageMenu = canManageUserProfile || canAssignProjects || canManagePermissions
   const isReadOnly = !canOpenManageMenu
@@ -187,145 +111,16 @@ export function AdminUserList({
     loadUsers()
   }, [filterStartDate, filterEndDate])
 
-  const handleUpdateEmployee = async () => {
-    if (!editingEmployee) return
-
-    setEmployeeSaveStatus("saving")
-    setEmployeeSaveMessage(null)
-
-    const parsedSchedule = WEEKDAYS.reduce((acc, day) => {
-      const hours = parseHoursInput(weeklyScheduleInputs[day] ?? "0")
-      return {
-        ...acc,
-        [day]: hours,
-      }
-    }, {} as WeeklySchedule)
-
-    try {
-      await updateUserEmployment(editingEmployee.id, {
-        employeeType: employeeTypeValue,
-        monthlyHours: Number.parseFloat(monthlyHoursValue),
-        weeklySchedule: parsedSchedule,
-        effectiveFrom: format(employeeEffectiveFrom, "yyyy-MM-dd"),
-      })
-      setWeeklyScheduleValue(parsedSchedule)
-      setWeeklyScheduleInputs(
-        WEEKDAYS.reduce((acc, day) => ({
-          ...acc,
-          [day]: formatHoursInput(parsedSchedule[day]),
-        }), {} as Record<Weekday, string>),
-      )
-      setEmployeeSaveStatus("success")
-      setEmployeeSaveMessage("Sollstunden erfolgreich gespeichert.")
-      loadUsers()
-      setTimeout(() => {
-        setEditingEmployee(null)
-        setEmployeeSaveStatus("idle")
-        setEmployeeSaveMessage(null)
-      }, 1200)
-    } catch (error) {
-      console.error("Fehler beim Aktualisieren:", error)
-      setEmployeeSaveStatus("error")
-      setEmployeeSaveMessage(error instanceof Error ? error.message : "Fehler beim Speichern")
-    }
-  }
-
-  const handleUpdateBundesland = async () => {
-    if (!editingBundesland) return
-    try {
-      await updateUserBundesland(editingBundesland.id, bundeslandValue)
-      setEditingBundesland(null)
-      loadUsers()
-    } catch (error) {
-      console.error("Fehler beim Aktualisieren:", error)
-    }
-  }
-
-  const handleOpenProjectsDialog = async (user: User) => {
-    setEditingProjects(user)
-    try {
-      const [projects, assignedIds] = await Promise.all([getAllProjects(), getUserProjectIds(user.id)])
-      setAllProjects(projects)
-      setSelectedProjectIds(assignedIds)
-    } catch (error) {
-      console.error("Fehler beim Laden der Projekte:", error)
-    }
-  }
-
-  const handleUpdateProjects = async () => {
-    if (!editingProjects) return
-    try {
-      await assignProjectsToUser(editingProjects.id, selectedProjectIds)
-      setEditingProjects(null)
-      loadUsers()
-    } catch (error) {
-      console.error("Fehler beim Aktualisieren:", error)
-    }
-  }
-
-  const toggleProjectSelection = (projectId: string) => {
-    setSelectedProjectIds((prev) =>
-      prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId],
-    )
-  }
-
-  const handleUpdateCategory = async () => {
-    if (!editingCategory) return
-    try {
-      await updateUserCategory(editingCategory.id, categoryValue)
-      setEditingCategory(null)
-      loadUsers()
-    } catch (error) {
-      console.error("Fehler beim Aktualisieren der Teams:", error)
-    }
-  }
-
-  const handleUpdateVacationDays = async () => {
-    if (!editingVacationDays) return
-    try {
-      await updateUserVacationDays(editingVacationDays.id, Number.parseFloat(vacationDaysValue))
-      setEditingVacationDays(null)
-      loadUsers()
-    } catch (error) {
-      console.error("Fehler beim Aktualisieren der Urlaubstage:", error)
-    }
-  }
 
 
-  const handleOpenAccessDialog = async (user: User) => {
-    setEditingAccessUser(user)
-    try {
-      const config = await getUserAccessConfig(user.id)
-      setAccessProfileValue(config.profile)
-      setPermissionValues(config.permissions)
-      setPermissionGroups(config.groups)
-    } catch (error) {
-      console.error("Fehler beim Laden der Rechte:", error)
-    }
-  }
 
-  const handleTogglePermission = (permission: AppPermission, enabled: boolean) => {
-    setPermissionValues((prev) => ({ ...prev, [permission]: enabled }))
-  }
 
-  const handleSaveAccess = async () => {
-    if (!editingAccessUser) return
 
-    setIsSavingAccess(true)
-    try {
-      await saveUserAccessConfig({
-        userId: editingAccessUser.id,
-        profile: accessProfileValue,
-        permissions: permissionValues,
-      })
-      setEditingAccessUser(null)
-      loadUsers()
-    } catch (error) {
-      console.error("Fehler beim Speichern der Rechte:", error)
-    } finally {
-      setIsSavingAccess(false)
-    }
-  }
+
+
+
+
+
 
   const getInitials = (name: string) =>
     name
@@ -409,6 +204,11 @@ export function AdminUserList({
     return result
   }, [users, searchTerm, employeeTypeFilters, categoryFilters, sortBy])
 
+  const kpiTotalHours = filteredUsers.reduce((sum, u) => sum + u.totalHours, 0)
+  const kpiEntries = filteredUsers.reduce((sum, u) => sum + u.entriesCount, 0)
+  const kpiAvgHours = filteredUsers.length > 0 ? kpiTotalHours / filteredUsers.length : 0
+  const kpiOvertime = filteredUsers.reduce((sum, u) => sum + (u.overtimeBalance ?? 0), 0)
+
   const hasActiveFilters =
     searchTerm.trim().length > 0 ||
     employeeTypeFilters.length > 0 ||
@@ -469,6 +269,34 @@ export function AdminUserList({
         </div>
       </div>
 
+      {/* Kennzahlen aus den bereits geladenen Daten – bewusst kein zweiter getAdminDashboardData-
+          Aufruf, der berechnet inzwischen pro Mitarbeiter den Überstundensaldo. */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {[
+          { label: "Mitarbeiter", value: filteredUsers.length.toString(), hint: hasActiveFilters ? `von ${users.length} gesamt` : "im Zugriff", icon: Users },
+          { label: "Stunden im Zeitraum", value: formatHours(kpiTotalHours), hint: `${kpiEntries} Einträge`, icon: Clock3 },
+          { label: "Ø pro Mitarbeiter", value: formatHours(kpiAvgHours), hint: "im gewählten Zeitraum", icon: ArrowUpDown },
+          {
+            label: "Überstunden gesamt",
+            value: (kpiOvertime > 0 ? "+" : "") + formatHours(kpiOvertime),
+            hint: "kumulierter Saldo aller Konten",
+            icon: kpiOvertime < 0 ? TrendingDown : TrendingUp,
+            tone: kpiOvertime > 0 ? "text-green-600 dark:text-green-400" : kpiOvertime < 0 ? "text-red-600 dark:text-red-400" : "",
+          },
+        ].map((kpi) => (
+          <Card key={kpi.label} className="border-border/70 bg-card/90 py-4">
+            <CardContent className="px-5">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{kpi.label}</p>
+                <kpi.icon className="h-4 w-4 text-primary" />
+              </div>
+              <p className={`mt-1 text-2xl font-semibold ${kpi.tone ?? ""}`}>{isLoading ? "…" : kpi.value}</p>
+              <p className="text-xs text-muted-foreground">{kpi.hint}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
       <Card className="border-border/70 bg-card/90">
         <CardContent className="p-0">
           <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
@@ -498,6 +326,10 @@ export function AdminUserList({
                   Reset
                 </Button>
               )}
+              <ExportButton
+                startDate={format(filterStartDate, "yyyy-MM-dd")}
+                endDate={format(filterEndDate, "yyyy-MM-dd")}
+              />
             </div>
           </div>
 
@@ -718,40 +550,21 @@ export function AdminUserList({
                               {canManageUserProfile && (
                                 <>
                                   <DropdownMenuLabel className="text-[11px] text-muted-foreground">Urlaub & Team</DropdownMenuLabel>
-                                  <DropdownMenuItem onClick={() => {
-                                    setEditingCategory(user)
-                                    setCategoryValue((user.category as UserCategory) || "sonstiges")
-                                  }}>
+                                  <DropdownMenuItem onClick={() => setEditingCategory(user)}>
                                     <Tags className="mr-2 h-3.5 w-3.5" />
                                     Team-Zuordnung ändern
                                   </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => {
-                                    setEditingVacationDays(user)
-                                    setVacationDaysValue((user.vacation_days_per_year || 30).toString())
-                                  }}>
+                                  <DropdownMenuItem onClick={() => setEditingVacationDays(user)}>
                                     <Plane className="mr-2 h-3.5 w-3.5" />
                                     Urlaubskontingent ändern
                                   </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => setAbsenceUser(user)}>
+                                    <CalendarDays className="mr-2 h-3.5 w-3.5" />
+                                    Abwesenheit eintragen
+                                  </DropdownMenuItem>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuLabel className="text-[11px] text-muted-foreground">Rahmendaten</DropdownMenuLabel>
-                                  <DropdownMenuItem onClick={() => {
-                                    const schedule = typeof user.weekly_schedule === "string"
-                                      ? JSON.parse(user.weekly_schedule as string)
-                                      : user.weekly_schedule || DEFAULT_WEEKLY_SCHEDULE
-                                    setEditingEmployee(user)
-                                    setEmployeeTypeValue((user.employee_type as EmployeeType) || "vollzeit")
-                                    setMonthlyHoursValue((user.monthly_hours || 173).toString())
-                                    setWeeklyScheduleValue(schedule)
-                                    setWeeklyScheduleInputs(
-                                      WEEKDAYS.reduce((acc, day) => ({
-                                        ...acc,
-                                        [day]: formatHoursInput(schedule[day] ?? 0),
-                                      }), {} as Record<Weekday, string>),
-                                    )
-                                    setEmployeeEffectiveFrom(new Date())
-                                    setEmployeeSaveStatus("idle")
-                                    setEmployeeSaveMessage(null)
-                                  }}>
+                                  <DropdownMenuItem onClick={() => setEditingEmployee(user)}>
                                     <TimerReset className="mr-2 h-3.5 w-3.5" />
                                     Beschäftigung & Sollstunden
                                   </DropdownMenuItem>
@@ -759,17 +572,14 @@ export function AdminUserList({
                                     <TrendingUp className="mr-2 h-3.5 w-3.5" />
                                     Überstundenkonto
                                   </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => {
-                                    setEditingBundesland(user)
-                                    setBundeslandValue((user.bundesland as Bundesland) || "BY")
-                                  }}>
+                                  <DropdownMenuItem onClick={() => setEditingBundesland(user)}>
                                     <MapPinned className="mr-2 h-3.5 w-3.5" />
                                     Bundesland & Feiertage
                                   </DropdownMenuItem>
                                 </>
                               )}
                               {canAssignProjects && (
-                                <DropdownMenuItem onClick={() => handleOpenProjectsDialog(user)}>
+                                <DropdownMenuItem onClick={() => setEditingProjects(user)}>
                                   <FolderTree className="mr-2 h-3.5 w-3.5" />
                                   Projekte zuweisen
                                 </DropdownMenuItem>
@@ -778,7 +588,7 @@ export function AdminUserList({
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuLabel className="text-[11px] text-muted-foreground">Rechte</DropdownMenuLabel>
-                                  <DropdownMenuItem onClick={() => handleOpenAccessDialog(user)}>
+                                  <DropdownMenuItem onClick={() => setEditingAccessUser(user)}>
                                     <ShieldCheck className="mr-2 h-3.5 w-3.5" />
                                     Rechte & Zugriffe
                                   </DropdownMenuItem>
@@ -821,361 +631,18 @@ export function AdminUserList({
         </Card>
       )}
 
-      <Dialog open={!!editingCategory} onOpenChange={() => setEditingCategory(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Team-Zuordnung ändern</DialogTitle>
-            <DialogDescription>
-              Lege fest, welchem Team <strong>{editingCategory?.name}</strong> zugeordnet ist.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-5">
-            <div className="space-y-2">
-              <Label>Team</Label>
-              <Select value={categoryValue} onValueChange={(v) => setCategoryValue(v as UserCategory)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(USER_CATEGORY_LABELS).map(([key, label]) => (
-                    <SelectItem key={key} value={key}>{label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">Die Team-Zuordnung steuert Urlaubsregeln und Auswertungen.</p>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-border/70 pt-3">
-              <Button variant="outline" onClick={() => setEditingCategory(null)}>Schließen</Button>
-              <Button onClick={handleUpdateCategory}>Änderung speichern</Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!editingEmployee} onOpenChange={() => setEditingEmployee(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Beschäftigung & Sollstunden</DialogTitle>
-            <DialogDescription>
-              Pflege Vertragsart und monatliches Soll für <strong>{editingEmployee?.name}</strong>.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-5">
-            <div className="space-y-2">
-              <Label>Gültig ab</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full justify-start text-left font-normal">
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {format(employeeEffectiveFrom, "PPP", { locale: de })}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={employeeEffectiveFrom}
-                    onSelect={(d) => d && setEmployeeEffectiveFrom(d)}
-                    locale={de}
-                    disabled={(d) => d > new Date()}
-                    initialFocus
-                  />
-                </PopoverContent>
-              </Popover>
-              <p className="text-xs text-muted-foreground">
-                Ab diesem Tag gilt die neue Regelung. Vergangene, bereits abgeschlossene Monate bleiben
-                unverändert – nur noch offene Monate ab diesem Datum rechnen mit dem neuen Soll. Ein
-                Datum in der Zukunft ist aktuell nicht möglich.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label>Beschäftigungsart</Label>
-              <Select
-                value={employeeTypeValue}
-                onValueChange={(value: EmployeeType) => {
-                  setEmployeeTypeValue(value)
-                  setMonthlyHoursValue((EMPLOYEE_TYPE_DEFAULTS[value] ?? 173).toString())
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="vollzeit">Vollzeit (173h/Monat)</SelectItem>
-                  <SelectItem value="teilzeit">Teilzeit (individuell)</SelectItem>
-                  <SelectItem value="minijob">Minijob (max. 43h/Monat bei 603€ / 13,90€)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Monatsstunden-Soll</Label>
-              <Input
-                type="number"
-                step="0.5"
-                value={monthlyHoursValue}
-                onChange={(e) => setMonthlyHoursValue(e.target.value)}
-              />
-              {employeeTypeValue === "minijob" && (
-                <p className="text-xs text-muted-foreground mt-1">Max. 43h bei 603€-Grenze und 13,90€ Mindestlohn (2026)</p>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label>Wochenplan Mo–So</Label>
-              <div className="rounded-lg border border-border/70 bg-muted/20 p-3">
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {WEEKDAYS.map((weekday) => (
-                    <div key={weekday} className="space-y-1.5 rounded-md border border-border/60 bg-background p-2.5">
-                      <div className="flex items-center justify-center">
-                        <Label className="text-xs font-semibold tracking-wide text-foreground">{WEEKDAY_LABELS[weekday]}</Label>
-                      </div>
-                    <Input
-                      type="text"
-                      inputMode="decimal"
-                      pattern="[0-9:,]*"
-                      placeholder="8:00"
-                      className="h-8 text-center text-sm font-medium tabular-nums"
-                      value={weeklyScheduleInputs[weekday] ?? "0:00"}
-                      onChange={(e) => setWeeklyScheduleInputs((prev) => ({
-                        ...prev,
-                        [weekday]: e.target.value,
-                      }))}
-                      onBlur={(e) => {
-                        const parsed = parseHoursInput(e.target.value)
-                        setWeeklyScheduleInputs((prev) => ({
-                          ...prev,
-                          [weekday]: formatHoursInput(parsed),
-                        }))
-                      }}
-                    />
-                  </div>
-                ))}
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1 rounded-md bg-muted/40 px-2.5 py-1.5 inline-flex items-center">
-                Summe: <span className="font-semibold text-foreground ml-1">{formatHours(Object.values(WEEKDAYS).reduce((sum, day) => sum + parseHoursInput(weeklyScheduleInputs[day] ?? "0"), 0))}</span> / Woche
-              </p>
-              {employeeSaveMessage && (
-                <Alert variant={employeeSaveStatus === "error" ? "destructive" : "default"} className="mt-2">
-                  <AlertDescription>{employeeSaveMessage}</AlertDescription>
-                </Alert>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 border-t border-border/70 pt-3">
-              <Button variant="outline" onClick={() => setEditingEmployee(null)}>Schließen</Button>
-              <Button onClick={handleUpdateEmployee}>Änderung speichern</Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
+      <CategoryDialog user={editingCategory} onClose={() => setEditingCategory(null)} onSaved={loadUsers} />
+      <EmploymentDialog user={editingEmployee} onClose={() => setEditingEmployee(null)} onSaved={loadUsers} />
       <OvertimeAccountDialog
         user={overtimeAccountUser}
         onClose={() => setOvertimeAccountUser(null)}
         onChanged={loadUsers}
       />
-
-      <Dialog open={!!editingVacationDays} onOpenChange={() => setEditingVacationDays(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Urlaubskontingent ändern</DialogTitle>
-            <DialogDescription>
-              Definiere das jährliche Urlaubskontingent für <strong>{editingVacationDays?.name}</strong>.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-5">
-            <div className="space-y-2">
-              <Label>Urlaubstage / Jahr</Label>
-              <Input
-                type="number"
-                min="0"
-                max="60"
-                step="0.5"
-                value={vacationDaysValue}
-                onChange={(e) => setVacationDaysValue(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">Diese Anzahl wird in der Urlaubsplanung als Jahreskontingent verwendet.</p>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-border/70 pt-3">
-              <Button variant="outline" onClick={() => setEditingVacationDays(null)}>Schließen</Button>
-              <Button onClick={handleUpdateVacationDays}>Änderung speichern</Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!editingBundesland} onOpenChange={() => setEditingBundesland(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Bundesland & Feiertage</DialogTitle>
-            <DialogDescription>
-              Wähle das Bundesland für <strong>{editingBundesland?.name}</strong>. Dadurch werden Feiertage korrekt berücksichtigt.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-5">
-            <div className="space-y-2">
-              <Label>Bundesland</Label>
-              <Select value={bundeslandValue} onValueChange={(value: Bundesland) => setBundeslandValue(value)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(BUNDESLAENDER).map(([code, name]) => (
-                    <SelectItem key={code} value={code}>{name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-border/70 pt-3">
-              <Button variant="outline" onClick={() => setEditingBundesland(null)}>Schließen</Button>
-              <Button onClick={handleUpdateBundesland}>Änderung speichern</Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!editingProjects} onOpenChange={() => setEditingProjects(null)}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Projekte zuweisen</DialogTitle>
-            <DialogDescription>
-              Wähle die Projekte, auf die <strong>{editingProjects?.name}</strong> buchen darf. Ohne Auswahl kann auf alle Projekte gebucht werden.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 max-h-[400px] overflow-y-auto">
-            {allProjects.length === 0 ? (
-              <p className="text-muted-foreground text-sm py-4 text-center">Keine Projekte vorhanden</p>
-            ) : (
-              allProjects.map((project) => (
-                <div
-                  key={project.id}
-                  className="flex items-center gap-3 p-3 rounded-lg border hover:bg-accent/50 cursor-pointer transition-colors"
-                  onClick={() => toggleProjectSelection(project.id)}
-                >
-                  <Checkbox
-                    checked={selectedProjectIds.includes(project.id)}
-                    onCheckedChange={() => toggleProjectSelection(project.id)}
-                  />
-                  <div className="w-3 h-3 rounded-full shrink-0 bg-primary/40" />
-                  <div className="flex-1">
-                    <p className="font-medium text-sm">{project.name}</p>
-                    {project.description && <p className="text-xs text-muted-foreground">{project.description}</p>}
-                  </div>
-                  {!project.is_active && <Badge variant="secondary" className="text-xs">Inaktiv</Badge>}
-                </div>
-              ))
-            )}
-          </div>
-          <div className="flex justify-between items-center pt-4 border-t border-border/70">
-            <p className="text-sm text-muted-foreground">
-              {selectedProjectIds.length} von {allProjects.length} ausgewählt
-            </p>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setEditingProjects(null)}>Schließen</Button>
-              <Button onClick={handleUpdateProjects}>Änderung speichern</Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!editingAccessUser} onOpenChange={() => setEditingAccessUser(null)}>
-        <DialogContent className="w-[99vw] !max-w-[1400px] sm:!max-w-[1400px] max-h-[92vh] overflow-hidden p-0">
-          <DialogHeader className="px-6 pt-6">
-            <DialogTitle>Rechte & Zugriffe</DialogTitle>
-            <DialogDescription>
-              Definiere Themenrechte und Einzelberechtigungen für <strong>{editingAccessUser?.name}</strong> direkt im Tool.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-5 overflow-y-auto px-6 pb-6">
-            <div className="grid gap-4 md:grid-cols-[220px_1fr]">
-              <div className="space-y-2">
-                <Label>Zugriffsprofil</Label>
-                <Select
-                  value={accessProfileValue}
-                  onValueChange={(value) => {
-                    const v = value as AccessProfile
-                    setAccessProfileValue(v)
-                    setPermissionValues({ ...buildPermissionMap(v) })
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="employee">Mitarbeiter</SelectItem>
-                    <SelectItem value="reporter">Reporter / Lesend</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  {accessProfileValue === "admin"
-                    ? "Admin hat immer vollen Zugriff auf alle Bereiche — ohne Einzelschalter."
-                    : "Das Profil setzt die Basis. Die Schalter darunter erlauben die Feineinstellung pro Thema (Zeiterfassung, Urlaub, …)."}
-                </p>
-              </div>
-
-              <Card className="border-border/70 bg-muted/30">
-                <CardContent className="p-4">
-                  <p className="text-sm font-medium">Hinweis</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Rechte werden nur in dieser Anwendung gespeichert (Datenbank), nicht über Microsoft-Gruppen gesteuert.
-                  </p>
-                </CardContent>
-              </Card>
-            </div>
-
-            {accessProfileValue === "admin" ? (
-              <Card className="border-primary/30 bg-primary/5">
-                <CardContent className="p-4">
-                  <p className="text-sm font-medium">Vollzugriff (Admin)</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Dieses Profil umfasst Zeiterfassung, Urlaub und Verwaltung ohne weitere Aufteilung.
-                  </p>
-                </CardContent>
-              </Card>
-            ) : (
-              <Tabs defaultValue={permissionGroups[0]?.key || "admin"} className="gap-4">
-                <TabsList className="grid w-full grid-cols-2 md:grid-cols-4">
-                  {permissionGroups.map((group) => (
-                    <TabsTrigger key={group.key} value={group.key}>{group.label}</TabsTrigger>
-                  ))}
-                </TabsList>
-
-                {permissionGroups.map((group) => (
-                  <TabsContent key={group.key} value={group.key}>
-                    <div className="rounded-xl border border-border/70 bg-card/90">
-                      <div className="border-b border-border/70 px-4 py-3">
-                        <p className="font-medium">{group.label}</p>
-                        <p className="text-xs text-muted-foreground mt-1">{group.description}</p>
-                      </div>
-                      <div className="divide-y divide-border/70">
-                        {group.permissions.map((permission) => (
-                          <div key={permission.key} className="flex items-start justify-between gap-4 px-4 py-3">
-                            <div className="space-y-1">
-                              <p className="text-sm font-medium">{permission.label}</p>
-                              <p className="text-xs text-muted-foreground">{permission.description}</p>
-                            </div>
-                            <Switch
-                              checked={!!permissionValues[permission.key]}
-                              onCheckedChange={(checked) => handleTogglePermission(permission.key, checked)}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </TabsContent>
-                ))}
-              </Tabs>
-            )}
-
-            <div className="sticky bottom-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 flex justify-end gap-2 border-t border-border/70 pt-3">
-              <Button variant="outline" onClick={() => setEditingAccessUser(null)} disabled={isSavingAccess}>Schließen</Button>
-              <Button onClick={handleSaveAccess} disabled={isSavingAccess}>
-                {isSavingAccess ? "Speichere..." : "Rechte speichern"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <VacationDaysDialog user={editingVacationDays} onClose={() => setEditingVacationDays(null)} onSaved={loadUsers} />
+      <BundeslandDialog user={editingBundesland} onClose={() => setEditingBundesland(null)} onSaved={loadUsers} />
+      <ProjectsDialog user={editingProjects} onClose={() => setEditingProjects(null)} onSaved={loadUsers} />
+      <AbsenceDialog user={absenceUser} onClose={() => setAbsenceUser(null)} onSaved={loadUsers} />
+      <AccessDialog user={editingAccessUser} onClose={() => setEditingAccessUser(null)} onSaved={loadUsers} />
     </div>
   )
 }

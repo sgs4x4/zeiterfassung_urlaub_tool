@@ -75,6 +75,51 @@ export default async function AdminPage() {
 
 
 
+        {/* Einstieg in die Fachbereiche. Diese Seite hat bisher zwar "verlinkte Fachbereiche"
+            versprochen, die Links fehlten aber – erreichbar waren sie nur über das Header-Menü. */}
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {[
+            {
+              href: "/admin/vacation-requests",
+              title: "Urlaubsanträge",
+              description: "Anträge prüfen, genehmigen oder ablehnen – inkl. Überstundenausgleich.",
+              icon: ClipboardList,
+              visible: access.canManageVacationRequests || access.canAccessAdmin,
+            },
+            {
+              href: "/admin/team-calendar",
+              title: "Teamkalender",
+              description: "Abwesenheiten im Team im Jahresverlauf und Sperrtage im Blick.",
+              icon: CalendarDays,
+              visible: true,
+            },
+            {
+              href: "/admin/projects",
+              title: "Projekte",
+              description: "Projekte anlegen, deaktivieren und Mitarbeitenden zuweisen.",
+              icon: FolderKanban,
+              visible: access.canManageProjects || access.canAssignProjects,
+            },
+          ]
+            .filter((item) => item.visible)
+            .map((item) => (
+              <Link key={item.href} href={item.href} className="group">
+                <Card className="h-full border-border/70 bg-card/90 transition-colors group-hover:border-primary/40 group-hover:bg-accent/30">
+                  <CardContent className="flex items-start justify-between gap-4 p-5">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <item.icon className="h-4 w-4 text-primary" />
+                        <p className="font-semibold">{item.title}</p>
+                      </div>
+                      <p className="text-sm text-muted-foreground">{item.description}</p>
+                    </div>
+                    <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+                  </CardContent>
+                </Card>
+              </Link>
+            ))}
+        </section>
+
         <section id="userverwaltung" className="space-y-3">
           <h2 className="text-lg font-semibold tracking-tight">Userverwaltung</h2>
           <p className="text-sm text-muted-foreground">

@@ -22,6 +22,7 @@ import {
 } from "@/lib/permissions-server"
 import type { AccessProfile, AppPermission } from "@/lib/permissions"
 import { canActorManageTargetTime, canActorViewTargetTime, filterUsersVisibleInAdmin } from "@/lib/visibility"
+import { recordAudit } from "@/lib/audit"
 
 function assertMonthlyWeeklyConsistency(monthlyHours: number, weeklyHours: number) {
   if (monthlyHours < 0 || weeklyHours < 0) {
@@ -128,9 +129,20 @@ export async function updateUserRole(userId: string, role: AccessProfile) {
   await requirePermission("admin.manage_permissions")
 
   const supabase = createClient()
+  const { data: previous } = await supabase.from("users").select("role").eq("id", userId).single()
   const { error } = await supabase.from("users").update({ role }).eq("id", userId)
 
   if (error) throw error
+
+  await recordAudit({
+    action: "user.role.update",
+    targetUserId: userId,
+    entityType: "users",
+    entityId: userId,
+    before: { role: previous?.role ?? null },
+    after: { role },
+  })
+
   return { success: true }
 }
 
@@ -169,7 +181,11 @@ export async function updateTimeEntryAdmin(
   if (!actor) throw new Error("Kein Zugriff")
 
   const supabase = createClient()
-  const { data: existing } = await supabase.from("time_entries").select("user_id").eq("id", entryId).single()
+  const { data: existing } = await supabase
+    .from("time_entries")
+    .select("user_id, date, hours, description, project_id")
+    .eq("id", entryId)
+    .single()
   if (!existing?.user_id) throw new Error("Eintrag nicht gefunden")
 
   const target = await getUserById(existing.user_id as string)
@@ -188,6 +204,16 @@ export async function updateTimeEntryAdmin(
     .eq("id", entryId)
 
   if (error) throw error
+
+  await recordAudit({
+    action: "time_entry.update",
+    targetUserId: existing.user_id as string,
+    entityType: "time_entries",
+    entityId: entryId,
+    before: { hours: existing.hours, description: existing.description, project_id: existing.project_id },
+    after: { hours, description: description || null, project_id: projectId || null },
+  })
+
   return { success: true }
 }
 
@@ -197,7 +223,11 @@ export async function deleteTimeEntryAdmin(entryId: string) {
   if (!actor) throw new Error("Kein Zugriff")
 
   const supabase = createClient()
-  const { data: existing } = await supabase.from("time_entries").select("user_id").eq("id", entryId).single()
+  const { data: existing } = await supabase
+    .from("time_entries")
+    .select("user_id, date, hours, description, project_id")
+    .eq("id", entryId)
+    .single()
   if (!existing?.user_id) throw new Error("Eintrag nicht gefunden")
 
   const target = await getUserById(existing.user_id as string)
@@ -208,6 +238,16 @@ export async function deleteTimeEntryAdmin(entryId: string) {
   const { error } = await supabase.from("time_entries").delete().eq("id", entryId)
 
   if (error) throw error
+
+  // Gelöschte Zeiteinträge sind sonst spurlos weg – das Protokoll hält den Inhalt fest.
+  await recordAudit({
+    action: "time_entry.delete",
+    targetUserId: existing.user_id as string,
+    entityType: "time_entries",
+    entityId: entryId,
+    before: existing,
+  })
+
   return { success: true }
 }
 
@@ -282,6 +322,19 @@ export async function updateUserEmployment(
     effectiveFrom,
     actor?.id ?? null,
   )
+
+  await recordAudit({
+    action: "employment.update",
+    targetUserId: userId,
+    entityType: "user_employment_terms",
+    entityId: userId,
+    after: {
+      employee_type: params.employeeType,
+      monthly_hours: params.monthlyHours,
+      weekly_hours: weeklyHours,
+      valid_from: effectiveFrom,
+    },
+  })
 
   revalidatePath("/admin")
   return { success: true }
@@ -379,16 +432,28 @@ export async function createOvertimeAdjustment(
   const hours = params.type === "payout" ? -Math.abs(params.hours) : params.hours
 
   const supabase = createClient()
-  const { error } = await supabase.from("overtime_adjustments").insert({
-    user_id: userId,
-    effective_date: params.effectiveDate,
-    hours,
-    type: params.type,
-    reason: params.reason.trim(),
-    created_by: actor?.id ?? null,
-  })
+  const { data: inserted, error } = await supabase
+    .from("overtime_adjustments")
+    .insert({
+      user_id: userId,
+      effective_date: params.effectiveDate,
+      hours,
+      type: params.type,
+      reason: params.reason.trim(),
+      created_by: actor?.id ?? null,
+    })
+    .select("id")
+    .single()
 
   if (error) throw new Error("Fehler beim Anlegen der Buchung")
+
+  await recordAudit({
+    action: "overtime.adjustment.create",
+    targetUserId: userId,
+    entityType: "overtime_adjustments",
+    entityId: inserted?.id ?? null,
+    after: { hours, type: params.type, effective_date: params.effectiveDate, reason: params.reason.trim() },
+  })
 
   revalidatePath("/admin")
   return { success: true }
@@ -401,7 +466,7 @@ export async function deleteOvertimeAdjustment(adjustmentId: string) {
   const supabase = createClient()
   const { data: adjustment } = await supabase
     .from("overtime_adjustments")
-    .select("absence_id")
+    .select("absence_id, user_id, hours, type, reason, effective_date")
     .eq("id", adjustmentId)
     .single()
 
@@ -414,6 +479,14 @@ export async function deleteOvertimeAdjustment(adjustmentId: string) {
 
   const { error } = await supabase.from("overtime_adjustments").delete().eq("id", adjustmentId)
   if (error) throw new Error("Fehler beim Löschen der Buchung")
+
+  await recordAudit({
+    action: "overtime.adjustment.delete",
+    targetUserId: adjustment.user_id as string,
+    entityType: "overtime_adjustments",
+    entityId: adjustmentId,
+    before: adjustment,
+  })
 
   revalidatePath("/admin")
   return { success: true }
@@ -440,7 +513,11 @@ export async function deleteMonthClosure(closureId: string) {
   if (!actor) throw new Error("Kein Zugriff")
 
   const supabase = createClient()
-  const { data: closure } = await supabase.from("month_closures").select("user_id").eq("id", closureId).single()
+  const { data: closure } = await supabase
+    .from("month_closures")
+    .select("user_id, year, month, total_hours, expected_hours, overtime")
+    .eq("id", closureId)
+    .single()
   if (!closure?.user_id) throw new Error("Eintrag nicht gefunden")
 
   const target = await getUserById(closure.user_id as string)
@@ -451,6 +528,17 @@ export async function deleteMonthClosure(closureId: string) {
   const { error } = await supabase.from("month_closures").delete().eq("id", closureId)
 
   if (error) throw error
+
+  // Das Aufheben eines Monatsabschlusses macht einen bereits "eingefrorenen" Monat wieder
+  // änderbar – besonders protokollpflichtig.
+  await recordAudit({
+    action: "month_closure.delete",
+    targetUserId: closure.user_id as string,
+    entityType: "month_closures",
+    entityId: closureId,
+    before: closure,
+  })
+
   return { success: true }
 }
 
@@ -487,6 +575,14 @@ export async function updateUserVacationDays(userId: string, vacationDaysPerYear
 
   if (error) throw new Error("Fehler beim Aktualisieren der Urlaubstage")
 
+  await recordAudit({
+    action: "user.vacation_days.update",
+    targetUserId: userId,
+    entityType: "users",
+    entityId: userId,
+    after: { vacation_days_per_year: vacationDaysPerYear },
+  })
+
   revalidatePath("/admin")
   revalidatePath("/urlaub")
 }
@@ -507,12 +603,27 @@ export async function updateUserOvertimeTrackingStart(userId: string, trackingSt
   }
 
   const supabase = createClient()
+  const { data: previous } = await supabase
+    .from("users")
+    .select("overtime_tracking_start_date")
+    .eq("id", userId)
+    .single()
+
   const { error } = await supabase
     .from("users")
     .update({ overtime_tracking_start_date: trackingStartDate })
     .eq("id", userId)
 
   if (error) throw new Error("Fehler beim Aktualisieren des Trackingbeginns")
+
+  await recordAudit({
+    action: "overtime.tracking_start.update",
+    targetUserId: userId,
+    entityType: "users",
+    entityId: userId,
+    before: { overtime_tracking_start_date: previous?.overtime_tracking_start_date ?? null },
+    after: { overtime_tracking_start_date: trackingStartDate },
+  })
 
   revalidatePath("/admin")
   return { success: true }
@@ -527,5 +638,22 @@ export async function saveUserAccessConfig(params: {
   profile: AccessProfile
   permissions: Partial<Record<AppPermission, boolean>>
 }) {
-  return updateUserPermissionMatrix(params)
+  const result = await updateUserPermissionMatrix(params)
+
+  // Rechteänderungen sind der sensibelste Eingriff überhaupt – wer darf plötzlich fremde
+  // Zeiten und Krankmeldungen sehen?
+  await recordAudit({
+    action: "permissions.update",
+    targetUserId: params.userId,
+    entityType: "users",
+    entityId: params.userId,
+    after: {
+      profile: params.profile,
+      granted: Object.entries(params.permissions)
+        .filter(([, enabled]) => enabled)
+        .map(([key]) => key),
+    },
+  })
+
+  return result
 }

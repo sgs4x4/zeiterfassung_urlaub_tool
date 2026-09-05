@@ -281,20 +281,24 @@ export async function getTimeEntriesForUser(userId: string, startDate: string, e
   return (data || []) as TimeEntry[]
 }
 
-export async function getAllTimeEntries(startDate: string, endDate: string): Promise<(TimeEntry & { user: User })[]> {
+export async function getAllTimeEntries(
+  startDate: string,
+  endDate: string,
+): Promise<(TimeEntry & { user: User; projects?: { name: string } | null })[]> {
   const supabase = createClient()
 
   const { data } = await supabase
     .from("time_entries")
     .select(`
       *,
-      user:users(*)
+      user:users(*),
+      projects(name)
     `)
     .gte("date", startDate)
     .lte("date", endDate)
     .order("date", { ascending: false })
 
-  return (data || []) as (TimeEntry & { user: User })[]
+  return (data || []) as (TimeEntry & { user: User; projects?: { name: string } | null })[]
 }
 
 export async function deleteTimeEntry(entryId: string, userId: string): Promise<void> {
