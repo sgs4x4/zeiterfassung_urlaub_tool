@@ -10,6 +10,8 @@ export function useCloseMonth() {
       queryClient.invalidateQueries({ queryKey: ["month-data"] })
       queryClient.invalidateQueries({ queryKey: ["overtime-balance"] })
       queryClient.invalidateQueries({ queryKey: ["overtime-trend"] })
+      queryClient.invalidateQueries({ queryKey: ["unclosed-months"] })
+      queryClient.invalidateQueries({ queryKey: ["month-closure-summary"] })
     },
   })
 }

@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server"
-import { format } from "date-fns"
+import { format, differenceInCalendarDays } from "date-fns"
 import { getServerSession } from "@/lib/auth"
 import type { Holiday, Bundesland } from "@/lib/holidays"
 
@@ -71,6 +71,20 @@ export const EMPLOYEE_TYPE_DEFAULTS: Record<EmployeeType, number> = {
   minijob: 43,
 }
 
+/**
+ * Ein historisierter Arbeitsverhältnis-Zeitraum (Tabelle user_employment_terms). Jede Änderung
+ * an Beschäftigungsart/Soll-Stunden/Wochenplan erzeugt eine neue Zeile statt die users-Zeile
+ * zu überschreiben – siehe scripts/019_user_employment_terms.sql und getMonthlyTargetHours().
+ */
+export type EmploymentTerm = {
+  employeeType: EmployeeType
+  monthlyHours: number
+  weeklyHours: number
+  weeklySchedule: WeeklySchedule
+  validFrom: string // yyyy-MM-dd
+  validTo: string | null // yyyy-MM-dd, null = aktuell gültig
+}
+
 export type TimeEntry = {
   id: string
   user_id: string
@@ -129,6 +143,24 @@ export async function findOrCreateUser(azureId: string, email: string, name: str
     .single()
 
   if (error) throw error
+
+  // Startpunkt der Arbeitsverhältnis-Historie anlegen, damit getMonthlyTargetHours() auch für
+  // den allerersten Monat dieses Nutzers einen historisierten Wert findet statt auf den
+  // Fallback zurückzufallen. Nicht kritisch für die Kontoerstellung selbst (Fallback greift),
+  // daher wird ein Fehler hier nur geloggt statt die Anmeldung zu blockieren.
+  const { error: termsError } = await supabase.from("user_employment_terms").insert({
+    user_id: newUser.id,
+    employee_type: "vollzeit",
+    monthly_hours: 173,
+    weekly_hours: 40,
+    weekly_schedule: defaultWeeklySchedule,
+    valid_from: format(new Date(), "yyyy-MM-dd"),
+    valid_to: null,
+  })
+  if (termsError) {
+    console.error("[db] Konnte initiale Arbeitsverhältnis-Historie nicht anlegen:", termsError)
+  }
+
   return newUser as User
 }
 
@@ -317,14 +349,110 @@ async function fetchHolidaysForBundesland(bundesland: Bundesland, year: number):
   return data || []
 }
 
+/**
+ * Liest alle Arbeitsverhältnis-Zeiträume, die sich mit [startDate, endDate] überschneiden.
+ */
+async function getEmploymentTermsOverlapping(
+  userId: string,
+  startDate: string,
+  endDate: string,
+): Promise<EmploymentTerm[]> {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase
+    .from("user_employment_terms")
+    .select("employee_type, monthly_hours, weekly_hours, weekly_schedule, valid_from, valid_to")
+    .eq("user_id", userId)
+    .lte("valid_from", endDate)
+    .or(`valid_to.is.null,valid_to.gte.${startDate}`)
+    .order("valid_from")
+
+  if (error) {
+    console.error("[db] Fehler beim Lesen der Arbeitsverhältnis-Historie:", error)
+    return []
+  }
+
+  return (data || []).map((row) => ({
+    employeeType: row.employee_type as EmployeeType,
+    monthlyHours: Number(row.monthly_hours),
+    weeklyHours: Number(row.weekly_hours),
+    weeklySchedule: row.weekly_schedule as WeeklySchedule,
+    validFrom: row.valid_from as string,
+    validTo: row.valid_to as string | null,
+  }))
+}
+
+/**
+ * Monats-Soll unter Berücksichtigung von Arbeitsverhältniswechseln: ändert sich der Vertrag
+ * (Beschäftigungsart/Sollstunden) mitten im Monat, wird das Soll taggenau zwischen altem und
+ * neuem Vertrag aufgeteilt, statt den kompletten Monat mit nur einem der beiden Werte zu
+ * rechnen. Damit bleiben bereits gerechnete/abgeschlossene Monate stabil, wenn später ein
+ * neuer Vertrag beginnt (siehe scripts/019_user_employment_terms.sql).
+ *
+ * `fallbackMonthlyHours` greift nur, wenn für den Zeitraum gar kein historisierter Datensatz
+ * existiert (z.B. Datenstand vor Einführung der Historie, dessen Backfill fehlgeschlagen ist).
+ */
+export async function getMonthlyTargetHours(
+  userId: string,
+  year: number,
+  month: number,
+  fallbackMonthlyHours = 173,
+): Promise<number> {
+  const monthStart = new Date(year, month - 1, 1)
+  const monthEnd = new Date(year, month, 0)
+  const startStr = format(monthStart, "yyyy-MM-dd")
+  const endStr = format(monthEnd, "yyyy-MM-dd")
+  const daysInMonth = monthEnd.getDate()
+
+  const terms = await getEmploymentTermsOverlapping(userId, startStr, endStr)
+  if (terms.length === 0) return fallbackMonthlyHours
+
+  let total = 0
+  for (const term of terms) {
+    const termStart = term.validFrom > startStr ? new Date(term.validFrom) : monthStart
+    const termEnd = term.validTo && term.validTo < endStr ? new Date(term.validTo) : monthEnd
+    const overlapDays = differenceInCalendarDays(termEnd, termStart) + 1
+    if (overlapDays <= 0) continue
+    total += term.monthlyHours * (overlapDays / daysInMonth)
+  }
+
+  return Math.round(total * 100) / 100
+}
+
+/**
+ * Einziger erlaubter Schreibpfad für Arbeitsverhältnis-Änderungen (Beschäftigungsart,
+ * Monats-/Wochenstunden, Wochenplan). Ruft die atomare set_user_employment_terms()-Funktion
+ * auf, statt users.* direkt zu überschreiben – siehe scripts/019_user_employment_terms.sql.
+ */
+export async function setUserEmploymentTerms(
+  userId: string,
+  terms: Pick<EmploymentTerm, "employeeType" | "monthlyHours" | "weeklyHours" | "weeklySchedule">,
+  validFrom: string,
+  createdBy: string | null,
+): Promise<void> {
+  const supabase = await createClient()
+
+  const { error } = await supabase.rpc("set_user_employment_terms", {
+    p_user_id: userId,
+    p_employee_type: terms.employeeType,
+    p_monthly_hours: terms.monthlyHours,
+    p_weekly_hours: terms.weeklyHours,
+    p_weekly_schedule: terms.weeklySchedule,
+    p_valid_from: validFrom,
+    p_created_by: createdBy,
+  })
+
+  if (error) throw error
+}
+
 export async function getOvertimeBalance(userId: string): Promise<number> {
   const supabase = await createClient()
 
-  const { data: user } = await supabase.from("users").select("monthly_hours, bundesland").eq("id", userId).single()
+  const { data: user } = await supabase.from("users").select("monthly_hours").eq("id", userId).single()
 
   if (!user) return 0
 
-  const monthlyTargetHours = user.monthly_hours || 173
+  const fallbackMonthlyHours = user.monthly_hours || 173
 
   const { data: entries } = await supabase
     .from("time_entries")
@@ -334,22 +462,24 @@ export async function getOvertimeBalance(userId: string): Promise<number> {
 
   if (!entries || entries.length === 0) return 0
 
-  const monthlyData = new Map<string, { actual: number; expected: number }>()
+  const actualByMonth = new Map<string, number>()
 
   entries.forEach((entry) => {
-    const date = new Date(entry.date)
-    const monthKey = format(date, "yyyy-MM")
-
-    if (!monthlyData.has(monthKey)) {
-      monthlyData.set(monthKey, { actual: 0, expected: monthlyTargetHours })
-    }
-    const month = monthlyData.get(monthKey)!
-    month.actual += Number(entry.hours)
+    const monthKey = entry.date.slice(0, 7) // yyyy-MM
+    actualByMonth.set(monthKey, (actualByMonth.get(monthKey) || 0) + Number(entry.hours))
   })
 
+  const monthKeys = Array.from(actualByMonth.keys())
+  const expectedByMonth = await Promise.all(
+    monthKeys.map((key) => {
+      const [y, m] = key.split("-").map(Number)
+      return getMonthlyTargetHours(userId, y, m, fallbackMonthlyHours)
+    }),
+  )
+
   let totalOvertime = 0
-  monthlyData.forEach(({ actual, expected }) => {
-    totalOvertime += actual - expected
+  monthKeys.forEach((key, i) => {
+    totalOvertime += (actualByMonth.get(key) || 0) - expectedByMonth[i]
   })
 
   return Math.round(totalOvertime * 100) / 100
@@ -362,7 +492,7 @@ export async function getMonthlyOvertime(userId: string, year: number, month: nu
 
   if (!user) return 0
 
-  const monthlyTargetHours = user.monthly_hours || 173
+  const monthlyTargetHours = await getMonthlyTargetHours(userId, year, month, user.monthly_hours || 173)
   const startDate = new Date(year, month - 1, 1)
   const endDate = new Date(year, month, 0)
 

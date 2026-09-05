@@ -26,13 +26,12 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
-import { Users, CalendarIcon, ChevronRight, ChevronDown, ClipboardList, Info, Search, MoreHorizontal, ArrowUpDown, BriefcaseBusiness, TimerReset, Tags, Plane, FolderTree, MapPinned, SlidersHorizontal, X } from "lucide-react"
+import { Users, CalendarIcon, ChevronRight, ChevronDown, ClipboardList, Info, Search, MoreHorizontal, ArrowUpDown, BriefcaseBusiness, TimerReset, Tags, Plane, FolderTree, MapPinned, SlidersHorizontal, X, TrendingUp, TrendingDown, Minus } from "lucide-react"
 import {
   getAdminDashboardData,
   getUserAccessConfig,
   saveUserAccessConfig,
-  updateUserEmployeeType,
-  updateUserWeeklySchedule,
+  updateUserEmployment,
   updateUserBundesland,
   updateUserCategory,
   updateUserVacationDays,
@@ -109,6 +108,8 @@ interface UserWithStats extends User {
   usedVacationDays?: number
   pendingVacationDays?: number
   remainingVacationDays?: number
+  /** Kumulierter Überstunden-Saldo seit Beginn der Erfassung (unabhängig vom Filterzeitraum). */
+  overtimeBalance?: number
 }
 
 type AdminUserListProps = {
@@ -134,13 +135,16 @@ export function AdminUserList({
   const [searchTerm, setSearchTerm] = useState("")
   const [employeeTypeFilters, setEmployeeTypeFilters] = useState<EmployeeType[]>([])
   const [categoryFilters, setCategoryFilters] = useState<UserCategory[]>([])
-  const [sortBy, setSortBy] = useState<"name" | "hours" | "vacation">("name")
+  const [sortBy, setSortBy] = useState<"name" | "hours" | "vacation" | "overtime">("name")
 
   const [editingEmployee, setEditingEmployee] = useState<User | null>(null)
   const [employeeTypeValue, setEmployeeTypeValue] = useState<EmployeeType>("vollzeit")
   const [monthlyHoursValue, setMonthlyHoursValue] = useState("")
   const [weeklyScheduleValue, setWeeklyScheduleValue] = useState<WeeklySchedule>(DEFAULT_WEEKLY_SCHEDULE)
   const [weeklyScheduleInputs, setWeeklyScheduleInputs] = useState<Record<Weekday, string>>(DEFAULT_WEEKLY_SCHEDULE_INPUTS)
+  // "Gültig ab": ab wann der neue Vertrag gilt. Rückwirkend erlaubt (Korrektur), in die Zukunft
+  // nicht (siehe updateUserEmployment in app/actions/admin.ts) – Default ist deshalb heute.
+  const [employeeEffectiveFrom, setEmployeeEffectiveFrom] = useState<Date>(new Date())
   const [employeeSaveStatus, setEmployeeSaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle")
   const [employeeSaveMessage, setEmployeeSaveMessage] = useState<string | null>(null)
 
@@ -196,8 +200,12 @@ export function AdminUserList({
     }, {} as WeeklySchedule)
 
     try {
-      await updateUserEmployeeType(editingEmployee.id, employeeTypeValue, Number.parseFloat(monthlyHoursValue))
-      await updateUserWeeklySchedule(editingEmployee.id, parsedSchedule)
+      await updateUserEmployment(editingEmployee.id, {
+        employeeType: employeeTypeValue,
+        monthlyHours: Number.parseFloat(monthlyHoursValue),
+        weeklySchedule: parsedSchedule,
+        effectiveFrom: format(employeeEffectiveFrom, "yyyy-MM-dd"),
+      })
       setWeeklyScheduleValue(parsedSchedule)
       setWeeklyScheduleInputs(
         WEEKDAYS.reduce((acc, day) => ({
@@ -391,6 +399,7 @@ export function AdminUserList({
     result.sort((a, b) => {
       if (sortBy === "hours") return b.totalHours - a.totalHours
       if (sortBy === "vacation") return (b.remainingVacationDays || 0) - (a.remainingVacationDays || 0)
+      if (sortBy === "overtime") return (a.overtimeBalance ?? 0) - (b.overtimeBalance ?? 0)
       return a.name.localeCompare(b.name, "de")
     })
 
@@ -468,7 +477,7 @@ export function AdminUserList({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Select value={sortBy} onValueChange={(v) => setSortBy(v as "name" | "hours" | "vacation") }>
+              <Select value={sortBy} onValueChange={(v) => setSortBy(v as "name" | "hours" | "vacation" | "overtime") }>
                 <SelectTrigger className="h-8 w-[230px]">
                   <ArrowUpDown className="mr-2 h-3.5 w-3.5" />
                   <SelectValue />
@@ -477,6 +486,7 @@ export function AdminUserList({
                   <SelectItem value="name">Sortierung: Name (A–Z)</SelectItem>
                   <SelectItem value="hours">Sortierung: Stunden (absteigend)</SelectItem>
                   <SelectItem value="vacation">Sortierung: Resturlaub (absteigend)</SelectItem>
+                  <SelectItem value="overtime">Sortierung: Überstunden (kritischste zuerst)</SelectItem>
                 </SelectContent>
               </Select>
               {hasActiveFilters && (
@@ -600,6 +610,7 @@ export function AdminUserList({
                 <TableHead className="text-right">Genommen</TableHead>
                 <TableHead className="text-right">Beantragt</TableHead>
                 <TableHead>Stunden im Zeitraum</TableHead>
+                <TableHead className="text-right">Überstunden</TableHead>
                 <TableHead className="text-right pr-4">Aktionen</TableHead>
               </TableRow>
             </TableHeader>
@@ -662,6 +673,30 @@ export function AdminUserList({
                         </div>
                       </div>
                     </TableCell>
+                    <TableCell className="text-right">
+                      {(() => {
+                        const overtime = user.overtimeBalance ?? 0
+                        const isPositive = overtime > 0
+                        const isNegative = overtime < 0
+                        return (
+                          <div
+                            className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-semibold ${
+                              isPositive
+                                ? "border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400"
+                                : isNegative
+                                  ? "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
+                                  : "border-border/70 bg-muted/40 text-muted-foreground"
+                            }`}
+                            title="Kumulierter Überstunden-Saldo seit Beginn der Erfassung"
+                          >
+                            {isPositive && <TrendingUp className="h-3 w-3" />}
+                            {isNegative && <TrendingDown className="h-3 w-3" />}
+                            {!isPositive && !isNegative && <Minus className="h-3 w-3" />}
+                            {(isPositive ? "+" : "") + formatHours(overtime)}
+                          </div>
+                        )
+                      })()}
+                    </TableCell>
                     <TableCell className="text-right pr-4">
                       <div className="flex justify-end items-center gap-2 flex-wrap">
                         {canOpenManageMenu && (
@@ -710,6 +745,7 @@ export function AdminUserList({
                                         [day]: formatHoursInput(schedule[day] ?? 0),
                                       }), {} as Record<Weekday, string>),
                                     )
+                                    setEmployeeEffectiveFrom(new Date())
                                     setEmployeeSaveStatus("idle")
                                     setEmployeeSaveMessage(null)
                                   }}>
@@ -818,6 +854,32 @@ export function AdminUserList({
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
+            <div className="space-y-2">
+              <Label>Gültig ab</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className="w-full justify-start text-left font-normal">
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {format(employeeEffectiveFrom, "PPP", { locale: de })}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={employeeEffectiveFrom}
+                    onSelect={(d) => d && setEmployeeEffectiveFrom(d)}
+                    locale={de}
+                    disabled={(d) => d > new Date()}
+                    initialFocus
+                  />
+                </PopoverContent>
+              </Popover>
+              <p className="text-xs text-muted-foreground">
+                Ab diesem Tag gilt die neue Regelung. Vergangene, bereits abgeschlossene Monate bleiben
+                unverändert – nur noch offene Monate ab diesem Datum rechnen mit dem neuen Soll. Ein
+                Datum in der Zukunft ist aktuell nicht möglich.
+              </p>
+            </div>
             <div className="space-y-2">
               <Label>Beschäftigungsart</Label>
               <Select

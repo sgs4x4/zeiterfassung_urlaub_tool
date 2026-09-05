@@ -8,6 +8,7 @@ import { GreetingHero } from "@/components/dashboard/greeting-hero"
 import { WeekBoard } from "@/components/dashboard/week-board"
 import { StatCards } from "@/components/dashboard/stat-cards"
 import { BetaNotice } from "@/components/dashboard/beta-notice"
+import { MonthClosureReminder } from "@/components/dashboard/month-closure-reminder"
 import { ViewSwitch } from "@/components/dashboard/view-switch"
 import { DayEntryForm } from "@/components/classic/day-entry-form"
 import { TimeEntries } from "@/components/classic/time-entries"
@@ -110,6 +111,7 @@ export default async function DashboardPage() {
     return (
       <div className="min-h-screen bg-background">
         {header}
+        <MonthClosureReminder />
         <AppShell className="max-w-6xl">
           <section className="flex flex-wrap items-end justify-between gap-4">
             <div className="space-y-2">
@@ -206,6 +208,7 @@ export default async function DashboardPage() {
   return (
     <div className="min-h-screen bg-background">
       {header}
+      <MonthClosureReminder />
       {notice}
       <AppShell className="max-w-[1400px] space-y-8">
         <GreetingHero
