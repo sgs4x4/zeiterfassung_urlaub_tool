@@ -12,12 +12,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
-import { ArrowLeft, CalendarIcon, Pencil, Trash2, CheckCircle2, X, Clock, FileText, Plus } from "lucide-react"
+import { ArrowLeft, CalendarIcon, Pencil, Trash2, CheckCircle2, X, Clock, FileText, Plus, TrendingUp, TrendingDown, Minus } from "lucide-react"
 import {
   updateTimeEntryAdmin,
   deleteTimeEntryAdmin,
   getUserClosedMonths,
   deleteMonthClosure,
+  getAdminOvertimeBalance,
 } from "@/app/actions/admin"
 import { saveTimeEntryForUser } from "@/app/actions/time-entries"
 import { getProjects, type Project } from "@/app/actions/projects"
@@ -68,6 +69,7 @@ export function UserEntriesView({
   const [entries, setEntries] = useState<TimeEntry[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [closedMonths, setClosedMonths] = useState<ClosedMonth[]>([])
+  const [overtimeBalance, setOvertimeBalance] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
   const [filterStartDate, setFilterStartDate] = useState<Date>(startOfMonth(new Date()))
@@ -139,9 +141,14 @@ export function UserEntriesView({
 
       setEntries(entriesData || [])
 
-      const [projectsData, closedData] = await Promise.all([getProjects(), getUserClosedMonths(userId)])
+      const [projectsData, closedData, overtime] = await Promise.all([
+        getProjects(),
+        getUserClosedMonths(userId),
+        getAdminOvertimeBalance(userId),
+      ])
       setProjects(projectsData)
       setClosedMonths(closedData)
+      setOvertimeBalance(overtime)
     } catch (error) {
       console.error("Fehler beim Laden:", error)
     } finally {
@@ -345,11 +352,11 @@ export function UserEntriesView({
       )}
 
       {/* Zusammenfassung */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Card>
           <CardContent className="pt-6">
             <div className="text-2xl font-bold">{formatHours(totalHours)}</div>
-            <p className="text-sm text-muted-foreground">Gesamtstunden</p>
+            <p className="text-sm text-muted-foreground">Gesamtstunden im Zeitraum</p>
           </CardContent>
         </Card>
         <Card>
@@ -362,6 +369,39 @@ export function UserEntriesView({
           <CardContent className="pt-6">
             <div className="text-2xl font-bold">{Object.keys(entriesByDate).length}</div>
             <p className="text-sm text-muted-foreground">Tage mit Einträgen</p>
+          </CardContent>
+        </Card>
+        <Card
+          className={
+            overtimeBalance !== null
+              ? overtimeBalance > 0
+                ? "border-green-500/50"
+                : overtimeBalance < 0
+                  ? "border-red-500/50"
+                  : ""
+              : ""
+          }
+        >
+          <CardContent className="pt-6">
+            <div
+              className={cn(
+                "flex items-center gap-1.5 text-2xl font-bold",
+                overtimeBalance !== null && overtimeBalance > 0 && "text-green-600 dark:text-green-400",
+                overtimeBalance !== null && overtimeBalance < 0 && "text-red-600 dark:text-red-400",
+              )}
+            >
+              {overtimeBalance === null ? (
+                "–"
+              ) : (
+                <>
+                  {overtimeBalance > 0 && <TrendingUp className="h-5 w-5" />}
+                  {overtimeBalance < 0 && <TrendingDown className="h-5 w-5" />}
+                  {overtimeBalance === 0 && <Minus className="h-5 w-5 text-muted-foreground" />}
+                  {(overtimeBalance > 0 ? "+" : "") + formatHours(overtimeBalance)}
+                </>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground">Überstunden-Saldo (kumuliert)</p>
           </CardContent>
         </Card>
       </div>

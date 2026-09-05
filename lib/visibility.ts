@@ -23,8 +23,12 @@ export function canActorViewTargetTime(actor: User, target: User, access: UserAc
 }
 
 export function canActorManageTargetTime(actor: User, target: User, access: UserAccess): boolean {
-  if (target.id === actor.id) return false
+  // App-Admins dürfen auch ihre eigenen Zeiteinträge über die Admin-Oberfläche verwalten.
+  // Der Selbst-Ausschluss unten gilt nur für Team-/Bereichsleiter ohne Admin-Profil, damit
+  // diese nicht "sich selbst als Vorgesetzten" verwalten – für Admins wäre das ein unbeabsichtigter
+  // Lockout (führte u.a. zu einem redigierten "Kein Zugriff"-Fehler beim manuellen Anlegen).
   if (isAppAdminProfile(access.profile)) return true
+  if (target.id === actor.id) return false
   const p = access.permissions
   if (p["time.manage_all_entries"]) return true
   if (p["time.manage_team_entries"]) {

@@ -11,6 +11,7 @@ import {
   getWeeklyHours,
   getOvertimeBalance as calcOvertime,
   getMonthlyOvertime,
+  getMonthlyTargetHours,
   calculateHoursFromTimes,
   type TimeEntry,
 } from "@/lib/db"
@@ -251,7 +252,7 @@ export async function getOvertimeTrend(monthsBack = 6): Promise<OvertimeTrendPoi
   }
 
   const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
-  const monthlyTarget = user.monthly_hours || 173
+  const fallbackMonthlyTarget = user.monthly_hours || 173
 
   const now = new Date()
   const months = Array.from({ length: monthsBack }, (_, i) => startOfMonth(subMonths(now, monthsBack - 1 - i)))
@@ -270,9 +271,15 @@ export async function getOvertimeTrend(monthsBack = 6): Promise<OvertimeTrendPoi
     actualByMonth.set(key, (actualByMonth.get(key) || 0) + Number(entry.hours))
   }
 
-  return months.map((monthDate) => ({
+  // Soll pro Monat aus der Arbeitsverhältnis-Historie auflösen, damit ein zwischenzeitlicher
+  // Vertragswechsel nicht rückwirkend das Soll früherer Monate verändert.
+  const monthlyTargets = await Promise.all(
+    months.map((monthDate) => getMonthlyTargetHours(user.id, monthDate.getFullYear(), monthDate.getMonth() + 1, fallbackMonthlyTarget)),
+  )
+
+  return months.map((monthDate, i) => ({
     month: format(monthDate, "MMM", { locale: de }),
-    delta: Math.round(((actualByMonth.get(format(monthDate, "yyyy-MM")) || 0) - monthlyTarget) * 100) / 100,
+    delta: Math.round(((actualByMonth.get(format(monthDate, "yyyy-MM")) || 0) - monthlyTargets[i]) * 100) / 100,
   }))
 }
 

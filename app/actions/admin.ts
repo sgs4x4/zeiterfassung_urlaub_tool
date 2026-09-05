@@ -1,7 +1,16 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { getAllUsers, getAllTimeEntries, getUserById, type EmployeeType, type Weekday, type WeeklySchedule } from "@/lib/db"
+import { format } from "date-fns"
+import {
+  getAllUsers,
+  getAllTimeEntries,
+  getUserById,
+  getOvertimeBalance,
+  setUserEmploymentTerms,
+  type EmployeeType,
+  type WeeklySchedule,
+} from "@/lib/db"
 import { createClient } from "@/lib/supabase/server"
 import type { Bundesland } from "@/lib/holidays"
 import {
@@ -79,6 +88,15 @@ export async function getAdminDashboardData(startDate: string, endDate: string) 
     vacationByUser.set(absence.user_id, current)
   }
 
+  // Kumulierter Überstunden-Saldo je Mitarbeiter (unabhängig vom gewählten Filterzeitraum,
+  // wie auf dem eigenen Dashboard). Parallelisiert, da getOvertimeBalance() pro Nutzer die
+  // komplette Zeiteintrags-Historie gegen die Arbeitsverhältnis-Historie auflöst; bei sehr
+  // vielen Mitarbeitenden könnte das später durch eine einzelne aggregierte Query ersetzt
+  // werden, für die üblichen Teamgrößen ist der parallele Rundlauf aber unproblematisch.
+  const overtimeByUser = new Map<string, number>(
+    await Promise.all(users.map(async (user) => [user.id, await getOvertimeBalance(user.id)] as const)),
+  )
+
   const userStats = users.map((user) => {
     const userEntries = filteredEntries.filter((entry) => entry.user_id === user.id)
     const totalHours = userEntries.reduce((sum, entry) => sum + Number(entry.hours), 0)
@@ -93,6 +111,7 @@ export async function getAdminDashboardData(startDate: string, endDate: string) 
       usedVacationDays: vacation.approved,
       pendingVacationDays: vacation.pending,
       remainingVacationDays,
+      overtimeBalance: overtimeByUser.get(user.id) ?? 0,
     }
   })
 
@@ -191,38 +210,40 @@ export async function deleteTimeEntryAdmin(entryId: string) {
   return { success: true }
 }
 
-export async function updateUserWeeklyHours(userId: string, weeklyHours: number) {
-  await requirePermission("users.manage_profile")
+/**
+ * Einziger Weg, das Arbeitsverhältnis eines Nutzers zu ändern (Beschäftigungsart,
+ * Monatsstunden-Soll, Wochenplan). Ersetzt die früheren getrennten Aktionen
+ * (updateUserWeeklyHours/-MonthlyHours/-EmployeeType/-WeeklySchedule), die users.* direkt
+ * überschrieben haben und dadurch Überstunden-/Sollstunden-Berechnungen für VERGANGENE Monate
+ * rückwirkend verfälscht haben, sobald sich ein Vertrag änderte.
+ *
+ * Schreibt stattdessen über setUserEmploymentTerms() einen neuen, historisierten Zeitraum
+ * (Tabelle user_employment_terms) – siehe scripts/019_user_employment_terms.sql. Ein
+ * `effectiveFrom`-Datum in der Vergangenheit erlaubt eine rückwirkende Korrektur (z.B. "der
+ * neue Vertrag galt eigentlich schon ab dem 1. des Monats"); ein Datum in der Zukunft wird
+ * abgelehnt, weil dafür aktuell kein Mechanismus existiert, der den denormalisierten
+ * "aktuellen Stand" auf users.* automatisch zum Stichtag nachzieht.
+ */
+export async function updateUserEmployment(
+  userId: string,
+  params: {
+    employeeType: EmployeeType
+    monthlyHours: number
+    weeklySchedule: WeeklySchedule
+    /** yyyy-MM-dd, Default: heute */
+    effectiveFrom?: string
+  },
+) {
+  const access = await requirePermission("users.manage_profile")
+  const actor = access.dbUser
 
-  if (weeklyHours < 0 || weeklyHours > 80) {
-    throw new Error("Ungültige Wochenstunden")
-  }
-
-  const supabase = createClient()
-  const { error } = await supabase.from("users").update({ weekly_hours: weeklyHours }).eq("id", userId)
-
-  if (error) throw error
-  return { success: true }
-}
-
-export async function updateUserWeeklySchedule(userId: string, weeklySchedule: WeeklySchedule) {
-  await requirePermission("users.manage_profile")
-
-  const normalizedSchedule = Object.entries(weeklySchedule).reduce((acc, [day, value]) => {
+  const normalizedSchedule = Object.entries(params.weeklySchedule).reduce((acc, [day, value]) => {
     const numericValue = Number(value)
     if (!Number.isFinite(numericValue)) {
       throw new Error("Ungültige Tagesstunden")
     }
-    return {
-      ...acc,
-      [day]: numericValue,
-    }
+    return { ...acc, [day]: numericValue }
   }, {} as WeeklySchedule)
-
-  const sumHours = Object.values(normalizedSchedule).reduce((sum, hours) => sum + hours, 0)
-  if (sumHours < 0 || sumHours > 80) {
-    throw new Error("Ungültige Wochenstunden")
-  }
 
   for (const day of Object.values(normalizedSchedule)) {
     if (day < 0 || day > 24) {
@@ -230,71 +251,38 @@ export async function updateUserWeeklySchedule(userId: string, weeklySchedule: W
     }
   }
 
-  const supabase = createClient()
-  const { data: currentUser, error: currentUserError } = await supabase
-    .from("users")
-    .select("monthly_hours")
-    .eq("id", userId)
-    .single()
-
-  if (currentUserError || !currentUser) {
-    throw new Error("Benutzer nicht gefunden")
+  const weeklyHours = Object.values(normalizedSchedule).reduce((sum, hours) => sum + hours, 0)
+  if (weeklyHours < 0 || weeklyHours > 80) {
+    throw new Error("Ungültige Wochenstunden")
   }
 
-  assertMonthlyWeeklyConsistency(Number(currentUser.monthly_hours || 0), sumHours)
-
-  const { error } = await supabase
-    .from("users")
-    .update({ weekly_schedule: normalizedSchedule, weekly_hours: sumHours })
-    .eq("id", userId)
-
-  if (error) {
-    if (error.code === "PGRST204" && error.message?.includes("weekly_schedule")) {
-      throw new Error(
-        "Die Spalte weekly_schedule fehlt im aktuellen Supabase-Schema. Bitte führe die Datenbankmigration aus oder aktualisiere das Schema."
-      )
-    }
-    throw error
-  }
-  return { success: true }
-}
-
-export async function updateUserMonthlyHours(userId: string, monthlyHours: number) {
-  await requirePermission("users.manage_profile")
-
-  if (monthlyHours < 0 || monthlyHours > 250) {
+  if (params.monthlyHours < 0 || params.monthlyHours > 250) {
     throw new Error("Ungültige Monatsstunden (0-250)")
   }
 
-  const supabase = createClient()
-  const { data: currentUser, error: currentUserError } = await supabase
-    .from("users")
-    .select("weekly_hours")
-    .eq("id", userId)
-    .single()
+  assertMonthlyWeeklyConsistency(params.monthlyHours, weeklyHours)
 
-  if (currentUserError || !currentUser) {
-    throw new Error("Benutzer nicht gefunden")
+  const today = format(new Date(), "yyyy-MM-dd")
+  const effectiveFrom = params.effectiveFrom || today
+  if (effectiveFrom > today) {
+    throw new Error(
+      "Ein für die Zukunft geplanter Wechsel wird aktuell nicht unterstützt. Bitte das Gültig-ab-Datum auf heute oder einen Tag in der Vergangenheit setzen.",
+    )
   }
 
-  assertMonthlyWeeklyConsistency(monthlyHours, Number(currentUser.weekly_hours || 0))
+  await setUserEmploymentTerms(
+    userId,
+    {
+      employeeType: params.employeeType,
+      monthlyHours: params.monthlyHours,
+      weeklyHours,
+      weeklySchedule: normalizedSchedule,
+    },
+    effectiveFrom,
+    actor?.id ?? null,
+  )
 
-  const { error } = await supabase.from("users").update({ monthly_hours: monthlyHours }).eq("id", userId)
-
-  if (error) throw error
-  return { success: true }
-}
-
-export async function updateUserEmployeeType(userId: string, employeeType: EmployeeType, monthlyHours: number) {
-  await requirePermission("users.manage_profile")
-
-  const supabase = createClient()
-  const { error } = await supabase
-    .from("users")
-    .update({ employee_type: employeeType, monthly_hours: monthlyHours })
-    .eq("id", userId)
-
-  if (error) throw error
+  revalidatePath("/admin")
   return { success: true }
 }
 
@@ -326,6 +314,19 @@ export async function getUserClosedMonths(userId: string) {
     .order("month", { ascending: false })
 
   return data || []
+}
+
+/** Kumulierter Überstunden-Saldo eines Mitarbeiters für die Admin-Detailansicht (/admin/users/[id]/entries). */
+export async function getAdminOvertimeBalance(userId: string): Promise<number> {
+  const access = await getCurrentUserAccess()
+  const actor = access.dbUser
+  if (!actor) throw new Error("Kein Zugriff")
+  const target = await getUserById(userId)
+  if (!target || !canActorViewTargetTime(actor, target, access)) {
+    throw new Error("Kein Zugriff")
+  }
+
+  return getOvertimeBalance(userId)
 }
 
 export async function deleteMonthClosure(closureId: string) {
