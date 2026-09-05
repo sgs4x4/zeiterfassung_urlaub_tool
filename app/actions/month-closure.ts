@@ -1,7 +1,7 @@
 "use server"
 
 import { getServerSession } from "@/lib/auth"
-import { findOrCreateUser, getMonthlyTargetHours } from "@/lib/db"
+import { findOrCreateUser, getMonthlyTargetHours, monthCoverageFraction } from "@/lib/db"
 import { createClient } from "@/lib/supabase/server"
 import { sendEmail, generateMonthClosureEmail } from "@/lib/email"
 import { revalidatePath } from "next/cache"
@@ -97,6 +97,11 @@ export type UnclosedMonth = {
  * eine leere Liste zurückgegeben. Monate werden unabhängig davon zurückgegeben, ob in ihnen
  * überhaupt Zeit erfasst wurde (solange sie NACH dem ersten Eintrag liegen), da ein Monat auch
  * mit 0 Stunden bewusst abgeschlossen werden muss (z.B. durchgehend Urlaub/Krankheit).
+ *
+ * Monate, die komplett vor dem individuellen Überstunden-Trackingbeginn liegen (siehe
+ * `overtime_tracking_start_date`, scripts/020_overtime_tracking_start.sql), werden NICHT als
+ * offen gemeldet – sonst würde direkt nach Einführung dieser Erinnerung ein ganzer Rückstau an
+ * fachlich gar nicht mehr relevanten Alt-Monaten erzwungen abgeschlossen werden müssen.
  */
 export async function getMyUnclosedMonths(): Promise<UnclosedMonth[]> {
   const session = (await getServerSession()) as any
@@ -105,6 +110,7 @@ export async function getMyUnclosedMonths(): Promise<UnclosedMonth[]> {
   }
 
   const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
+  const trackingStart = user.overtime_tracking_start_date ? new Date(user.overtime_tracking_start_date) : null
   const supabase = await createClient()
 
   const [{ data: closures }, { data: firstEntry }] = await Promise.all([
@@ -126,7 +132,7 @@ export async function getMyUnclosedMonths(): Promise<UnclosedMonth[]> {
     const year = cursor.getFullYear()
     const month = cursor.getMonth() + 1
 
-    if (!closedKeys.has(`${year}-${month}`)) {
+    if (!closedKeys.has(`${year}-${month}`) && monthCoverageFraction(year, month, trackingStart) > 0) {
       const daysOverdue = differenceInDays(today, endOfMonth(cursor))
       result.push({ year, month, daysOverdue, isBlocking: daysOverdue >= 7 })
     }
@@ -145,10 +151,16 @@ export async function getMonthClosureSummary(year: number, month: number) {
   }
 
   const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
+  const trackingStart = user.overtime_tracking_start_date ? new Date(user.overtime_tracking_start_date) : null
   const supabase = await createClient()
 
-  const startDate = format(startOfMonth(new Date(year, month - 1)), "yyyy-MM-dd")
-  const endDate = format(endOfMonth(new Date(year, month - 1)), "yyyy-MM-dd")
+  const monthStart = new Date(year, month - 1)
+  const fraction = monthCoverageFraction(year, month, trackingStart)
+  // Ab Trackingbeginn zählen (siehe getOvertimeBalance in lib/db.ts): im Übergangsmonat nur die
+  // Tage ab dem Stichtag berücksichtigen, sonst den ganzen Monat.
+  const startDate =
+    trackingStart && trackingStart > monthStart ? format(trackingStart, "yyyy-MM-dd") : format(startOfMonth(monthStart), "yyyy-MM-dd")
+  const endDate = format(endOfMonth(monthStart), "yyyy-MM-dd")
 
   const { data: entries } = await supabase
     .from("time_entries")
@@ -158,7 +170,7 @@ export async function getMonthClosureSummary(year: number, month: number) {
     .lte("date", endDate)
 
   const totalHours = (entries || []).reduce((sum, e) => sum + Number(e.hours), 0)
-  const expectedHours = await getMonthlyTargetHours(user.id, year, month, user.monthly_hours || 173)
+  const expectedHours = (await getMonthlyTargetHours(user.id, year, month, user.monthly_hours || 173)) * fraction
 
   return {
     totalHours,
@@ -175,6 +187,7 @@ export async function closeMonth(year: number, month: number) {
   }
 
   const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
+  const trackingStart = user.overtime_tracking_start_date ? new Date(user.overtime_tracking_start_date) : null
 
   // Prüfen ob Monat geschlossen werden darf
   const canClose = await canCloseMonth(year, month)
@@ -190,9 +203,13 @@ export async function closeMonth(year: number, month: number) {
 
   const supabase = await createClient()
 
-  // Zeiteinträge für den Monat abrufen
-  const startDate = format(startOfMonth(new Date(year, month - 1)), "yyyy-MM-dd")
-  const endDate = format(endOfMonth(new Date(year, month - 1)), "yyyy-MM-dd")
+  // Zeiteinträge für den Monat abrufen – ab Trackingbeginn (siehe getOvertimeBalance in
+  // lib/db.ts): im Übergangsmonat nur die Tage ab dem Stichtag, sonst der ganze Monat.
+  const monthStart = new Date(year, month - 1)
+  const fraction = monthCoverageFraction(year, month, trackingStart)
+  const startDate =
+    trackingStart && trackingStart > monthStart ? format(trackingStart, "yyyy-MM-dd") : format(startOfMonth(monthStart), "yyyy-MM-dd")
+  const endDate = format(endOfMonth(monthStart), "yyyy-MM-dd")
 
   const { data: entries } = await supabase
     .from("time_entries")
@@ -205,8 +222,9 @@ export async function closeMonth(year: number, month: number) {
   const totalHours = entries?.reduce((sum, e) => sum + Number(e.hours), 0) || 0
   // Soll aus der Arbeitsverhältnis-Historie für GENAU diesen Monat auflösen, statt den
   // aktuellen users.monthly_hours-Wert zu nehmen – der kann inzwischen (z.B. bei später
-  // abgeschlossenen Monaten) schon wieder geändert worden sein.
-  const expectedHours = await getMonthlyTargetHours(user.id, year, month, user.monthly_hours || 173)
+  // abgeschlossenen Monaten) schon wieder geändert worden sein. Anteilig gekürzt, falls der
+  // Trackingbeginn mitten in diesen Monat fällt.
+  const expectedHours = (await getMonthlyTargetHours(user.id, year, month, user.monthly_hours || 173)) * fraction
   const overtime = totalHours - expectedHours
 
   // Monatsabschluss speichern

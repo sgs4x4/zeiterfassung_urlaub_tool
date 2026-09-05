@@ -12,6 +12,7 @@ import {
   getOvertimeBalance as calcOvertime,
   getMonthlyOvertime,
   getMonthlyTargetHours,
+  monthCoverageFraction,
   calculateHoursFromTimes,
   type TimeEntry,
 } from "@/lib/db"
@@ -253,6 +254,7 @@ export async function getOvertimeTrend(monthsBack = 6): Promise<OvertimeTrendPoi
 
   const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
   const fallbackMonthlyTarget = user.monthly_hours || 173
+  const trackingStart = user.overtime_tracking_start_date ? new Date(user.overtime_tracking_start_date) : null
 
   const now = new Date()
   const months = Array.from({ length: monthsBack }, (_, i) => startOfMonth(subMonths(now, monthsBack - 1 - i)))
@@ -265,16 +267,27 @@ export async function getOvertimeTrend(monthsBack = 6): Promise<OvertimeTrendPoi
     .gte("date", format(months[0], "yyyy-MM-dd"))
     .lte("date", format(endOfMonth(now), "yyyy-MM-dd"))
 
+  // Einträge vor Trackingbeginn zählen nicht (siehe getOvertimeBalance in lib/db.ts) – sonst
+  // tauchen vor-Rollout-Stunden ohne Soll-Vergleich als vermeintliche Überstunden im Trend auf.
+  const relevantEntries = trackingStart
+    ? (entries || []).filter((e) => e.date >= format(trackingStart, "yyyy-MM-dd"))
+    : entries || []
+
   const actualByMonth = new Map<string, number>()
-  for (const entry of entries || []) {
+  for (const entry of relevantEntries) {
     const key = entry.date.slice(0, 7) // yyyy-MM
     actualByMonth.set(key, (actualByMonth.get(key) || 0) + Number(entry.hours))
   }
 
-  // Soll pro Monat aus der Arbeitsverhältnis-Historie auflösen, damit ein zwischenzeitlicher
-  // Vertragswechsel nicht rückwirkend das Soll früherer Monate verändert.
+  // Soll pro Monat aus der Arbeitsverhältnis-Historie auflösen (Vertragswechsel wirken sich
+  // nicht rückwirkend aus) und auf den Anteil ab Trackingbeginn kürzen.
   const monthlyTargets = await Promise.all(
-    months.map((monthDate) => getMonthlyTargetHours(user.id, monthDate.getFullYear(), monthDate.getMonth() + 1, fallbackMonthlyTarget)),
+    months.map(async (monthDate) => {
+      const year = monthDate.getFullYear()
+      const month = monthDate.getMonth() + 1
+      const fullTarget = await getMonthlyTargetHours(user.id, year, month, fallbackMonthlyTarget)
+      return fullTarget * monthCoverageFraction(year, month, trackingStart)
+    }),
   )
 
   return months.map((monthDate, i) => ({

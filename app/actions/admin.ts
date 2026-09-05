@@ -388,6 +388,40 @@ export async function updateUserVacationDays(userId: string, vacationDaysPerYear
   revalidatePath("/urlaub")
 }
 
+/**
+ * "Überstunden-Basis" eines Mitarbeiters: ab wann Monate für den Überstunden-Saldo zählen
+ * (`overtime_tracking_start_date`) und ein optionaler manueller Start-Saldo
+ * (`overtime_baseline_hours`, z.B. übernommen aus einem Vorgängersystem). Siehe
+ * scripts/020_overtime_tracking_start.sql und getOvertimeBalance in lib/db.ts – ohne diese
+ * Grenze werden Monate von VOR dem Tool-Rollout fälschlich als große Fehlstunden gerechnet.
+ */
+export async function updateUserOvertimeBaseline(
+  userId: string,
+  params: { trackingStartDate: string; baselineHours: number },
+) {
+  await requirePermission("users.manage_profile")
+
+  if (!params.trackingStartDate || Number.isNaN(new Date(params.trackingStartDate).getTime())) {
+    throw new Error("Ungültiges Datum")
+  }
+  if (!Number.isFinite(params.baselineHours)) {
+    throw new Error("Ungültiger Start-Saldo")
+  }
+
+  const supabase = createClient()
+  const { error } = await supabase
+    .from("users")
+    .update({
+      overtime_tracking_start_date: params.trackingStartDate,
+      overtime_baseline_hours: params.baselineHours,
+    })
+    .eq("id", userId)
+
+  if (error) throw new Error("Fehler beim Aktualisieren der Überstunden-Basis")
+
+  revalidatePath("/admin")
+}
+
 export async function getUserAccessConfig(userId: string) {
   return getUserPermissionMatrix(userId)
 }

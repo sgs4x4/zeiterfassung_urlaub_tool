@@ -31,6 +31,10 @@ export type User = {
   employee_type: EmployeeType
   bundesland: string
   category: UserCategory | null
+  /** Ab diesem Datum zählen Monate für den Überstunden-Saldo (siehe getOvertimeBalance). */
+  overtime_tracking_start_date: string
+  /** Einmaliger manueller Start-Saldo (z.B. aus einem Vorgängersystem), wird zum Saldo addiert. */
+  overtime_baseline_hours: number
   created_at: string
   updated_at: string
 }
@@ -445,39 +449,88 @@ export async function setUserEmploymentTerms(
   if (error) throw error
 }
 
-export async function getOvertimeBalance(userId: string): Promise<number> {
+/**
+ * Anteil eines Kalendermonats, der ab `trackingStart` für den Überstunden-Saldo zählt.
+ * 1 = ganzer Monat zählt, 0 = Monat liegt komplett vor Trackingbeginn (z.B. weil das Tool für
+ * diesen Mitarbeiter erst später eingeführt wurde). Für den Monat, in dem der Trackingbeginn
+ * selbst liegt, wird taggenau anteilig gerechnet, damit dieser Monat nicht komplett wegfällt.
+ *
+ * Ohne diese Grenze wurden Monate VOR dem eigentlichen Rollout mit dem vollen Monats-Soll
+ * verglichen, obwohl darin kaum/gar nicht im Tool erfasst wurde – das erzeugte riesige,
+ * fachlich falsche Minusstunden direkt nach der Einführung (siehe
+ * scripts/020_overtime_tracking_start.sql).
+ */
+export function monthCoverageFraction(year: number, month: number, trackingStart: Date | null): number {
+  if (!trackingStart) return 1
+  const monthStart = new Date(year, month - 1, 1)
+  const monthEnd = new Date(year, month, 0)
+  if (trackingStart > monthEnd) return 0
+  if (trackingStart <= monthStart) return 1
+  const daysInMonth = monthEnd.getDate()
+  const daysCounted = differenceInCalendarDays(monthEnd, trackingStart) + 1
+  return daysCounted / daysInMonth
+}
+
+/** Liest Trackingbeginn und Start-Saldo eines Nutzers einmalig, zum Weiterreichen an mehrere Monatsberechnungen. */
+export async function getOvertimeSettings(
+  userId: string,
+): Promise<{ trackingStart: Date | null; baselineHours: number; fallbackMonthlyHours: number } | null> {
   const supabase = await createClient()
+  const { data: user } = await supabase
+    .from("users")
+    .select("monthly_hours, overtime_tracking_start_date, overtime_baseline_hours")
+    .eq("id", userId)
+    .single()
 
-  const { data: user } = await supabase.from("users").select("monthly_hours").eq("id", userId).single()
+  if (!user) return null
 
-  if (!user) return 0
+  return {
+    trackingStart: user.overtime_tracking_start_date ? new Date(user.overtime_tracking_start_date) : null,
+    baselineHours: Number(user.overtime_baseline_hours || 0),
+    fallbackMonthlyHours: user.monthly_hours || 173,
+  }
+}
 
-  const fallbackMonthlyHours = user.monthly_hours || 173
+export async function getOvertimeBalance(userId: string): Promise<number> {
+  const settings = await getOvertimeSettings(userId)
+  if (!settings) return 0
+  const { trackingStart, baselineHours, fallbackMonthlyHours } = settings
 
+  const supabase = await createClient()
   const { data: entries } = await supabase
     .from("time_entries")
     .select("date, hours")
     .eq("user_id", userId)
     .order("date")
 
-  if (!entries || entries.length === 0) return 0
+  // Einträge vor Trackingbeginn zählen nicht zum Saldo – konsistent mit dem prorierten Soll
+  // für den Übergangsmonat unten (sonst würden vor-Rollout-Stunden ohne Soll-Vergleich als
+  // "Überstunden" durchrutschen).
+  const relevantEntries = trackingStart
+    ? (entries || []).filter((e) => e.date >= format(trackingStart, "yyyy-MM-dd"))
+    : entries || []
+
+  if (relevantEntries.length === 0) {
+    return Math.round(baselineHours * 100) / 100
+  }
 
   const actualByMonth = new Map<string, number>()
 
-  entries.forEach((entry) => {
+  relevantEntries.forEach((entry) => {
     const monthKey = entry.date.slice(0, 7) // yyyy-MM
     actualByMonth.set(monthKey, (actualByMonth.get(monthKey) || 0) + Number(entry.hours))
   })
 
   const monthKeys = Array.from(actualByMonth.keys())
   const expectedByMonth = await Promise.all(
-    monthKeys.map((key) => {
+    monthKeys.map(async (key) => {
       const [y, m] = key.split("-").map(Number)
-      return getMonthlyTargetHours(userId, y, m, fallbackMonthlyHours)
+      const fullTarget = await getMonthlyTargetHours(userId, y, m, fallbackMonthlyHours)
+      return fullTarget * monthCoverageFraction(y, m, trackingStart)
     }),
   )
 
-  let totalOvertime = 0
+  let totalOvertime = baselineHours
   monthKeys.forEach((key, i) => {
     totalOvertime += (actualByMonth.get(key) || 0) - expectedByMonth[i]
   })
@@ -486,22 +539,29 @@ export async function getOvertimeBalance(userId: string): Promise<number> {
 }
 
 export async function getMonthlyOvertime(userId: string, year: number, month: number): Promise<number> {
+  const settings = await getOvertimeSettings(userId)
+  if (!settings) return 0
+  const { trackingStart, fallbackMonthlyHours } = settings
+
+  const fraction = monthCoverageFraction(year, month, trackingStart)
+  if (fraction === 0) return 0 // Monat liegt komplett vor Trackingbeginn – nicht relevant
+
+  const fullTarget = await getMonthlyTargetHours(userId, year, month, fallbackMonthlyHours)
+  const monthlyTargetHours = fullTarget * fraction
+
+  const monthStart = new Date(year, month - 1, 1)
+  const monthEnd = new Date(year, month, 0)
+  const startDate =
+    trackingStart && trackingStart > monthStart ? format(trackingStart, "yyyy-MM-dd") : format(monthStart, "yyyy-MM-dd")
+  const endDate = format(monthEnd, "yyyy-MM-dd")
+
   const supabase = await createClient()
-
-  const { data: user } = await supabase.from("users").select("monthly_hours").eq("id", userId).single()
-
-  if (!user) return 0
-
-  const monthlyTargetHours = await getMonthlyTargetHours(userId, year, month, user.monthly_hours || 173)
-  const startDate = new Date(year, month - 1, 1)
-  const endDate = new Date(year, month, 0)
-
   const { data: entries } = await supabase
     .from("time_entries")
     .select("hours")
     .eq("user_id", userId)
-    .gte("date", format(startDate, "yyyy-MM-dd"))
-    .lte("date", format(endDate, "yyyy-MM-dd"))
+    .gte("date", startDate)
+    .lte("date", endDate)
 
   const actualHours = (entries || []).reduce((sum, e) => sum + Number(e.hours), 0)
 
