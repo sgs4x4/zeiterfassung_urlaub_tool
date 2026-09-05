@@ -3,7 +3,14 @@
 import { revalidatePath } from "next/cache"
 import { createClient } from "@/lib/supabase/server"
 import { getServerSession } from "@/lib/auth"
-import { findOrCreateUser, getUserByEmail, isVacationAllowedForCategory, USER_CATEGORY_LABELS } from "@/lib/db"
+import {
+  findOrCreateUser,
+  getUserByEmail,
+  getOvertimeBalance,
+  getScheduledHoursForRange,
+  isVacationAllowedForCategory,
+  USER_CATEGORY_LABELS,
+} from "@/lib/db"
 import { eachDayOfInterval, isWeekend } from "date-fns"
 import { format } from "date-fns"
 import { de } from "date-fns/locale"
@@ -19,10 +26,12 @@ const ADMIN_EMAILS = [
   "Christoph.Thielecke@sgs4x4.de",
 ]
 
+export type AbsenceType = "vacation" | "sick" | "other" | "overtime_compensation"
+
 export type Absence = {
   id: string
   user_id: string
-  type: "vacation" | "sick" | "other"
+  type: AbsenceType
   start_date: string
   end_date: string
   days: number
@@ -133,6 +142,7 @@ function getAbsenceTypeLabel(type: Absence["type"]) {
     vacation: "Urlaub",
     sick: "Krankheit",
     other: "Sonstiges",
+    overtime_compensation: "Überstundenausgleich",
   }
   return labels[type]
 }
@@ -224,18 +234,38 @@ export async function requestAbsence(formData: FormData) {
   const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
   const supabase = await createClient()
 
-  const type = formData.get("type") as "vacation" | "sick" | "other"
+  const type = formData.get("type") as AbsenceType
   const startDate = formData.get("start_date") as string
   const endDate = formData.get("end_date") as string
   const dayPart = (formData.get("day_part") as "full" | "half_am" | "half_pm" | null) || "full"
   const reason = (formData.get("reason") as string) || null
 
   if (!type || !startDate || !endDate) throw new Error("Pflichtfelder fehlen")
-  if (type !== "vacation" && dayPart !== "full") {
-    throw new Error("Halbe Tage sind nur für Urlaub möglich")
+  // Halbe Tage gibt es für Urlaub und für Überstundenausgleich (ein halber Tag frei ist der
+  // häufigste Ausgleichsfall), nicht für Krankheit/Sonstiges.
+  if (type !== "vacation" && type !== "overtime_compensation" && dayPart !== "full") {
+    throw new Error("Halbe Tage sind nur für Urlaub und Überstundenausgleich möglich")
   }
   if (dayPart !== "full" && startDate !== endDate) {
-    throw new Error("Halbe Urlaubstage sind nur für einzelne Tage möglich")
+    throw new Error("Halbe Tage sind nur für einzelne Tage möglich")
+  }
+
+  if (type === "overtime_compensation") {
+    // Nicht mehr abbauen, als auf dem Überstundenkonto ist.
+    const [balance, scheduledHours] = await Promise.all([
+      getOvertimeBalance(user.id),
+      getScheduledHoursForRange(user.id, startDate, endDate),
+    ])
+    const requiredHours = dayPart === "full" ? scheduledHours : scheduledHours / 2
+
+    if (requiredHours <= 0) {
+      throw new Error("Im gewählten Zeitraum liegen keine planmäßigen Arbeitsstunden")
+    }
+    if (requiredHours > balance) {
+      throw new Error(
+        `Nicht genügend Überstunden: Der Ausgleich benötigt ${requiredHours.toFixed(2)} Std., verfügbar sind ${balance.toFixed(2)} Std.`,
+      )
+    }
   }
 
   const baseDays = await countVacationDaysExcludingHolidays(startDate, endDate, (user.bundesland as Bundesland) || "BY")
@@ -315,7 +345,12 @@ export async function requestAbsence(formData: FormData) {
   const approvalLink = `${appBaseUrl}/admin/vacation-requests?absenceId=${insertedAbsence.id}`
 
   // E-Mail an Admins
-  const typeLabels: Record<string, string> = { vacation: "Urlaub", sick: "Krankheit", other: "Sonstiges" }
+  const typeLabels: Record<string, string> = {
+    vacation: "Urlaub",
+    sick: "Krankheit",
+    other: "Sonstiges",
+    overtime_compensation: "Überstundenausgleich",
+  }
   try {
     const recipients = await getRecipientsForVacationStatusEmails(ADMIN_EMAILS, "pending")
     if (recipients.length === 0) {
@@ -381,18 +416,18 @@ export async function updateMyAbsence(id: string, formData: FormData) {
     throw new Error("Dieser Antrag kann nicht mehr bearbeitet werden")
   }
 
-  const type = formData.get("type") as "vacation" | "sick" | "other"
+  const type = formData.get("type") as AbsenceType
   const startDate = formData.get("start_date") as string
   const endDate = formData.get("end_date") as string
   const dayPart = (formData.get("day_part") as "full" | "half_am" | "half_pm" | null) || "full"
   const reason = (formData.get("reason") as string) || null
 
   if (!type || !startDate || !endDate) throw new Error("Pflichtfelder fehlen")
-  if (type !== "vacation" && dayPart !== "full") {
-    throw new Error("Halbe Tage sind nur für Urlaub möglich")
+  if (type !== "vacation" && type !== "overtime_compensation" && dayPart !== "full") {
+    throw new Error("Halbe Tage sind nur für Urlaub und Überstundenausgleich möglich")
   }
   if (dayPart !== "full" && startDate !== endDate) {
-    throw new Error("Halbe Urlaubstage sind nur für einzelne Tage möglich")
+    throw new Error("Halbe Tage sind nur für einzelne Tage möglich")
   }
 
   const baseDays = await countVacationDaysExcludingHolidays(startDate, endDate, (user.bundesland as Bundesland) || "BY")
@@ -581,6 +616,41 @@ export async function updateAbsenceStatus(id: string, status: "approved" | "reje
 
   const { error } = await supabase.from("absences").update(updatePayload).eq("id", id)
   if (error) throw new Error("Fehler beim Aktualisieren")
+
+  // Überstundenausgleich wirkt sich erst mit der Genehmigung auf das Konto aus: dann entsteht
+  // eine nachvollziehbare Abbuchung in Höhe der planmäßigen Stunden des Zeitraums. Bei Ablehnung
+  // (auch nachträglich) wird eine bestehende Buchung wieder entfernt.
+  if (absenceData.type === "overtime_compensation") {
+    if (status === "approved") {
+      const scheduledHours = await getScheduledHoursForRange(
+        absenceData.user_id as string,
+        absenceData.start_date as string,
+        absenceData.end_date as string,
+      )
+      const hours = absenceData.day_part === "full" ? scheduledHours : scheduledHours / 2
+
+      // upsert über den Unique-Index auf absence_id: eine erneute Genehmigung erzeugt keine
+      // zweite Abbuchung (siehe scripts/021_overtime_adjustments.sql).
+      const { error: adjustmentError } = await supabase.from("overtime_adjustments").upsert(
+        {
+          user_id: absenceData.user_id,
+          effective_date: absenceData.start_date,
+          hours: -Math.abs(hours),
+          type: "compensation",
+          reason: `Freizeitausgleich ${absenceData.start_date} bis ${absenceData.end_date}`,
+          absence_id: id,
+          created_by: actorDbUser?.id ?? null,
+        },
+        { onConflict: "absence_id" },
+      )
+      if (adjustmentError) {
+        console.error("[absences] Ausgleichsbuchung fehlgeschlagen:", adjustmentError)
+        throw new Error("Antrag genehmigt, aber die Überstunden-Buchung ist fehlgeschlagen")
+      }
+    } else {
+      await supabase.from("overtime_adjustments").delete().eq("absence_id", id)
+    }
+  }
 
   try {
     await sendStatusChangeEmails({

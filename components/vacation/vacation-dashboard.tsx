@@ -26,6 +26,7 @@ import {
   getVacationBalance,
   getBlockedDays,
   type Absence,
+  type AbsenceType,
   type BlockedDay,
 } from "@/app/actions/absences"
 import { getHolidaysForYear } from "@/app/actions/holidays"
@@ -33,7 +34,12 @@ import { cn } from "@/lib/utils"
 import { Progress } from "@/components/ui/progress"
 import { BUNDESLAENDER, type Bundesland, type Holiday } from "@/lib/holidays"
 
-const TYPE_LABELS: Record<string, string> = { vacation: "Urlaub", sick: "Krankheit", other: "Sonstiges" }
+const TYPE_LABELS: Record<string, string> = {
+  vacation: "Urlaub",
+  sick: "Krankheit",
+  other: "Sonstiges",
+  overtime_compensation: "Überstundenausgleich",
+}
 const TYPE_COLORS: Record<string, string> = { vacation: "bg-blue-500", sick: "bg-red-400", other: "bg-amber-400" }
 const STATUS_CONFIG = {
   pending:  { label: "Ausstehend", badge: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400" },
@@ -65,7 +71,7 @@ function NewRequestDialog({
   readOnly?: boolean
   bundesland: Bundesland
 }) {
-  const [type, setType] = useState<"vacation" | "sick" | "other">("vacation")
+  const [type, setType] = useState<AbsenceType>("vacation")
   const [startDate, setStartDate] = useState("")
   const [endDate, setEndDate] = useState("")
   const [dayPart, setDayPart] = useState<"full" | "half_am" | "half_pm">("full")
@@ -183,12 +189,13 @@ function NewRequestDialog({
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           <div className="space-y-1.5">
             <Label>Art der Abwesenheit</Label>
-            <Select value={type} onValueChange={(v) => setType(v as "vacation" | "sick" | "other")}>
+            <Select value={type} onValueChange={(v) => setType(v as AbsenceType)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="vacation">Urlaub</SelectItem>
                 <SelectItem value="sick">Krankheit</SelectItem>
                 <SelectItem value="other">Sonstiges</SelectItem>
+                <SelectItem value="overtime_compensation">Überstundenausgleich</SelectItem>
               </SelectContent>
             </Select>
           </div>

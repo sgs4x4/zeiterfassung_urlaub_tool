@@ -9,6 +9,7 @@ import {
   getOvertimeBalance,
   setUserEmploymentTerms,
   type EmployeeType,
+  type OvertimeAdjustmentType,
   type WeeklySchedule,
 } from "@/lib/db"
 import { createClient } from "@/lib/supabase/server"
@@ -316,6 +317,108 @@ export async function getUserClosedMonths(userId: string) {
   return data || []
 }
 
+/**
+ * Buchungshistorie des Überstundenkontos (Auszahlung, Freizeitausgleich, Korrektur, Startsaldo).
+ * Siehe scripts/021_overtime_adjustments.sql.
+ */
+export async function getOvertimeAdjustments(userId: string) {
+  const access = await getCurrentUserAccess()
+  const actor = access.dbUser
+  if (!actor) throw new Error("Kein Zugriff")
+  const target = await getUserById(userId)
+  if (!target || !canActorViewTargetTime(actor, target, access)) {
+    throw new Error("Kein Zugriff")
+  }
+
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from("overtime_adjustments")
+    .select("id, effective_date, hours, type, reason, absence_id, created_at, creator:users!overtime_adjustments_created_by_fkey(name)")
+    .eq("user_id", userId)
+    .order("effective_date", { ascending: false })
+    .order("created_at", { ascending: false })
+
+  if (error) throw new Error("Fehler beim Laden der Überstunden-Buchungen")
+
+  return (data || []).map((row) => ({
+    id: row.id as string,
+    effectiveDate: row.effective_date as string,
+    hours: Number(row.hours),
+    type: row.type as OvertimeAdjustmentType,
+    reason: (row.reason as string) || null,
+    absenceId: (row.absence_id as string) || null,
+    createdAt: row.created_at as string,
+    createdByName: ((row as any).creator?.name as string) || null,
+  }))
+}
+
+/**
+ * Manuelle Buchung auf das Überstundenkonto – z.B. Auszahlung oder abgesprochene Streichung.
+ * Bewusst als Buchung statt als Überschreiben eines Saldos: so bleibt nachvollziehbar, wer wann
+ * warum eingegriffen hat.
+ */
+export async function createOvertimeAdjustment(
+  userId: string,
+  params: { effectiveDate: string; hours: number; type: "payout" | "correction"; reason: string },
+) {
+  const access = await requirePermission("users.manage_profile")
+  const actor = access.dbUser
+
+  if (!params.effectiveDate || Number.isNaN(new Date(params.effectiveDate).getTime())) {
+    throw new Error("Ungültiges Datum")
+  }
+  if (!Number.isFinite(params.hours) || params.hours === 0) {
+    throw new Error("Bitte eine Stundenzahl ungleich 0 angeben")
+  }
+  if (!params.reason?.trim()) {
+    // Pflichtfeld: Eine Korrektur am Zeitkonto ohne Begründung ist später nicht mehr erklärbar.
+    throw new Error("Bitte einen Grund angeben")
+  }
+
+  // Auszahlungen reduzieren das Konto immer, unabhängig vom Vorzeichen der Eingabe.
+  const hours = params.type === "payout" ? -Math.abs(params.hours) : params.hours
+
+  const supabase = createClient()
+  const { error } = await supabase.from("overtime_adjustments").insert({
+    user_id: userId,
+    effective_date: params.effectiveDate,
+    hours,
+    type: params.type,
+    reason: params.reason.trim(),
+    created_by: actor?.id ?? null,
+  })
+
+  if (error) throw new Error("Fehler beim Anlegen der Buchung")
+
+  revalidatePath("/admin")
+  return { success: true }
+}
+
+/** Storniert eine manuelle Buchung. Ausgleichsbuchungen hängen am Antrag und werden hier nicht angefasst. */
+export async function deleteOvertimeAdjustment(adjustmentId: string) {
+  await requirePermission("users.manage_profile")
+
+  const supabase = createClient()
+  const { data: adjustment } = await supabase
+    .from("overtime_adjustments")
+    .select("absence_id")
+    .eq("id", adjustmentId)
+    .single()
+
+  if (!adjustment) throw new Error("Buchung nicht gefunden")
+  if (adjustment.absence_id) {
+    throw new Error(
+      "Diese Buchung gehört zu einem genehmigten Ausgleichsantrag. Bitte stattdessen den Antrag zurückziehen oder ablehnen.",
+    )
+  }
+
+  const { error } = await supabase.from("overtime_adjustments").delete().eq("id", adjustmentId)
+  if (error) throw new Error("Fehler beim Löschen der Buchung")
+
+  revalidatePath("/admin")
+  return { success: true }
+}
+
 /** Kumulierter Überstunden-Saldo eines Mitarbeiters für die Admin-Detailansicht (/admin/users/[id]/entries). */
 export async function getAdminOvertimeBalance(userId: string): Promise<number> {
   const access = await getCurrentUserAccess()
@@ -389,37 +492,30 @@ export async function updateUserVacationDays(userId: string, vacationDaysPerYear
 }
 
 /**
- * "Überstunden-Basis" eines Mitarbeiters: ab wann Monate für den Überstunden-Saldo zählen
- * (`overtime_tracking_start_date`) und ein optionaler manueller Start-Saldo
- * (`overtime_baseline_hours`, z.B. übernommen aus einem Vorgängersystem). Siehe
- * scripts/020_overtime_tracking_start.sql und getOvertimeBalance in lib/db.ts – ohne diese
- * Grenze werden Monate von VOR dem Tool-Rollout fälschlich als große Fehlstunden gerechnet.
+ * Ab wann Monate eines Mitarbeiters für den Überstunden-Saldo zählen
+ * (`overtime_tracking_start_date`). Ohne diese Grenze werden Monate von VOR dem Tool-Rollout
+ * fälschlich als große Fehlstunden gerechnet – siehe scripts/020_overtime_tracking_start.sql.
+ *
+ * Ein abweichender Startsaldo wird nicht mehr hier gepflegt, sondern als Buchung
+ * (`opening_balance`) im Ledger – siehe createOvertimeAdjustment.
  */
-export async function updateUserOvertimeBaseline(
-  userId: string,
-  params: { trackingStartDate: string; baselineHours: number },
-) {
+export async function updateUserOvertimeTrackingStart(userId: string, trackingStartDate: string) {
   await requirePermission("users.manage_profile")
 
-  if (!params.trackingStartDate || Number.isNaN(new Date(params.trackingStartDate).getTime())) {
+  if (!trackingStartDate || Number.isNaN(new Date(trackingStartDate).getTime())) {
     throw new Error("Ungültiges Datum")
-  }
-  if (!Number.isFinite(params.baselineHours)) {
-    throw new Error("Ungültiger Start-Saldo")
   }
 
   const supabase = createClient()
   const { error } = await supabase
     .from("users")
-    .update({
-      overtime_tracking_start_date: params.trackingStartDate,
-      overtime_baseline_hours: params.baselineHours,
-    })
+    .update({ overtime_tracking_start_date: trackingStartDate })
     .eq("id", userId)
 
-  if (error) throw new Error("Fehler beim Aktualisieren der Überstunden-Basis")
+  if (error) throw new Error("Fehler beim Aktualisieren des Trackingbeginns")
 
   revalidatePath("/admin")
+  return { success: true }
 }
 
 export async function getUserAccessConfig(userId: string) {

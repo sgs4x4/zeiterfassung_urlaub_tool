@@ -35,8 +35,8 @@ import {
   updateUserBundesland,
   updateUserCategory,
   updateUserVacationDays,
-  updateUserOvertimeBaseline,
 } from "@/app/actions/admin"
+import { OvertimeAccountDialog } from "@/components/admin/overtime-account-dialog"
 import { getAllProjects, getUserProjectIds, assignProjectsToUser, type Project } from "@/app/actions/projects"
 import { type User, type EmployeeType, type UserCategory, type Weekday, type WeeklySchedule, EMPLOYEE_TYPE_DEFAULTS, USER_CATEGORY_LABELS } from "@/lib/db"
 import { buildPermissionMap, type AccessProfile, type AppPermission, type PermissionGroup } from "@/lib/permissions"
@@ -160,11 +160,7 @@ export function AdminUserList({
   const [categoryValue, setCategoryValue] = useState<UserCategory>("sonstiges")
   const [editingVacationDays, setEditingVacationDays] = useState<User | null>(null)
   const [vacationDaysValue, setVacationDaysValue] = useState("30")
-  const [editingOvertimeBaseline, setEditingOvertimeBaseline] = useState<User | null>(null)
-  const [overtimeTrackingStartValue, setOvertimeTrackingStartValue] = useState<Date>(new Date())
-  const [overtimeBaselineHoursValue, setOvertimeBaselineHoursValue] = useState("0")
-  const [overtimeBaselineSaveStatus, setOvertimeBaselineSaveStatus] = useState<"idle" | "saving" | "error">("idle")
-  const [overtimeBaselineSaveMessage, setOvertimeBaselineSaveMessage] = useState<string | null>(null)
+  const [overtimeAccountUser, setOvertimeAccountUser] = useState<User | null>(null)
   const [editingAccessUser, setEditingAccessUser] = useState<User | null>(null)
   const [accessProfileValue, setAccessProfileValue] = useState<AccessProfile>("employee")
   const [permissionValues, setPermissionValues] = useState<Partial<Record<AppPermission, boolean>>>({})
@@ -295,24 +291,6 @@ export function AdminUserList({
     }
   }
 
-  const handleUpdateOvertimeBaseline = async () => {
-    if (!editingOvertimeBaseline) return
-    setOvertimeBaselineSaveStatus("saving")
-    setOvertimeBaselineSaveMessage(null)
-    try {
-      await updateUserOvertimeBaseline(editingOvertimeBaseline.id, {
-        trackingStartDate: format(overtimeTrackingStartValue, "yyyy-MM-dd"),
-        baselineHours: Number.parseFloat(overtimeBaselineHoursValue) || 0,
-      })
-      setEditingOvertimeBaseline(null)
-      setOvertimeBaselineSaveStatus("idle")
-      loadUsers()
-    } catch (error) {
-      console.error("Fehler beim Aktualisieren der Überstunden-Basis:", error)
-      setOvertimeBaselineSaveStatus("error")
-      setOvertimeBaselineSaveMessage(error instanceof Error ? error.message : "Fehler beim Speichern")
-    }
-  }
 
   const handleOpenAccessDialog = async (user: User) => {
     setEditingAccessUser(user)
@@ -777,17 +755,9 @@ export function AdminUserList({
                                     <TimerReset className="mr-2 h-3.5 w-3.5" />
                                     Beschäftigung & Sollstunden
                                   </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => {
-                                    setEditingOvertimeBaseline(user)
-                                    setOvertimeTrackingStartValue(
-                                      user.overtime_tracking_start_date ? new Date(user.overtime_tracking_start_date) : new Date(),
-                                    )
-                                    setOvertimeBaselineHoursValue((user.overtime_baseline_hours ?? 0).toString())
-                                    setOvertimeBaselineSaveStatus("idle")
-                                    setOvertimeBaselineSaveMessage(null)
-                                  }}>
+                                  <DropdownMenuItem onClick={() => setOvertimeAccountUser(user)}>
                                     <TrendingUp className="mr-2 h-3.5 w-3.5" />
-                                    Überstunden-Basis
+                                    Überstundenkonto
                                   </DropdownMenuItem>
                                   <DropdownMenuItem onClick={() => {
                                     setEditingBundesland(user)
@@ -997,68 +967,11 @@ export function AdminUserList({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!editingOvertimeBaseline} onOpenChange={() => setEditingOvertimeBaseline(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Überstunden-Basis</DialogTitle>
-            <DialogDescription>
-              Legt fest, ab wann die Zeiterfassung für <strong>{editingOvertimeBaseline?.name}</strong> in den
-              Überstunden-Saldo einfließt.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-5">
-            <div className="space-y-2">
-              <Label>Zeiterfassung zählt ab</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full justify-start text-left font-normal">
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {format(overtimeTrackingStartValue, "PPP", { locale: de })}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={overtimeTrackingStartValue}
-                    onSelect={(d) => d && setOvertimeTrackingStartValue(d)}
-                    locale={de}
-                    initialFocus
-                  />
-                </PopoverContent>
-              </Popover>
-              <p className="text-xs text-muted-foreground">
-                Monate vor diesem Datum zählen NICHT in den Überstunden-Saldo (weder Soll noch erfasste
-                Stunden) – z.B. weil das Tool für diese Person erst ab hier zuverlässig genutzt wurde. Ohne
-                triftigen Grund für die Vergangenheit auf "heute" belassen.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label>Start-Saldo (Std.)</Label>
-              <Input
-                type="number"
-                step="0.25"
-                value={overtimeBaselineHoursValue}
-                onChange={(e) => setOvertimeBaselineHoursValue(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Optionaler manueller Zuschlag zum berechneten Saldo, z.B. übernommen aus einem
-                Vorgängersystem. Normalerweise 0.
-              </p>
-            </div>
-            {overtimeBaselineSaveMessage && (
-              <Alert variant={overtimeBaselineSaveStatus === "error" ? "destructive" : "default"}>
-                <AlertDescription>{overtimeBaselineSaveMessage}</AlertDescription>
-              </Alert>
-            )}
-            <div className="flex justify-end gap-2 border-t border-border/70 pt-3">
-              <Button variant="outline" onClick={() => setEditingOvertimeBaseline(null)}>Abbrechen</Button>
-              <Button onClick={handleUpdateOvertimeBaseline} disabled={overtimeBaselineSaveStatus === "saving"}>
-                {overtimeBaselineSaveStatus === "saving" ? "Speichere..." : "Speichern"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <OvertimeAccountDialog
+        user={overtimeAccountUser}
+        onClose={() => setOvertimeAccountUser(null)}
+        onChanged={loadUsers}
+      />
 
       <Dialog open={!!editingVacationDays} onOpenChange={() => setEditingVacationDays(null)}>
         <DialogContent className="sm:max-w-md">
