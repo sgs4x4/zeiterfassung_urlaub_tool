@@ -13,7 +13,7 @@ import {
   subWeeks,
 } from "date-fns"
 import { de } from "date-fns/locale"
-import { ChevronLeft, ChevronRight, Lock, Plus } from "lucide-react"
+import { ChevronLeft, ChevronRight, Lock, Plane, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -21,6 +21,7 @@ import { cn, formatHours } from "@/lib/utils"
 import { useWeekBoard } from "@/hooks/queries/use-week-board"
 import type { WeeklySchedule } from "@/lib/db"
 import type { WeekBoardData } from "@/app/actions/time-entries"
+import { ABSENCE_TYPE_STYLES, resolveDayAbsence } from "@/lib/day-absence"
 import { EntryDialog } from "./entry-dialog"
 
 const WEEKDAY_INDEX_TO_KEY = {
@@ -54,6 +55,7 @@ export function WeekBoard({ weeklySchedule, weeklyHours }: WeekBoardProps) {
   const days = eachDayOfInterval({ start: weekStart, end: weekEnd })
   const entries = data?.entries ?? []
   const holidays = data?.holidays ?? []
+  const absences = data?.absences ?? []
   const closedMonths = data?.closedMonths ?? []
   const editableFrom = data?.editableFrom ? new Date(data.editableFrom) : null
 
@@ -132,6 +134,7 @@ export function WeekBoard({ weeklySchedule, weeklyHours }: WeekBoardProps) {
             const target = targetFor(day)
             const isToday = isSameDay(day, new Date())
             const holiday = holidays.find((h) => h.date === format(day, "yyyy-MM-dd"))
+            const absence = resolveDayAbsence(format(day, "yyyy-MM-dd"), absences)
             const isOffDay = target === 0
             const editable = isDayEditable(day)
             const isComplete = target > 0 && dayHours >= target
@@ -143,6 +146,7 @@ export function WeekBoard({ weeklySchedule, weeklyHours }: WeekBoardProps) {
                   "group/day flex min-h-[220px] flex-col transition-colors",
                   isOffDay && "bg-muted/30",
                   holiday && "bg-primary/[0.04]",
+                  absence && !absence.isPending && "bg-accent/40",
                   isToday && "bg-primary/[0.06]",
                 )}
               >
@@ -188,6 +192,28 @@ export function WeekBoard({ weeklySchedule, weeklyHours }: WeekBoardProps) {
                   {holiday && (
                     <p className="mt-2 truncate text-[11px] font-medium text-primary" title={holiday.name}>
                       {holiday.name}
+                    </p>
+                  )}
+
+                  {/* Abwesenheiten sichtbar machen: Sie reduzieren das Tagessoll, ohne sie wäre
+                      nicht erkennbar, warum hier nichts (oder nur die Hälfte) zu buchen ist. */}
+                  {absence && (
+                    <p
+                      className={cn(
+                        "mt-2 flex items-center gap-1 truncate text-[11px] font-medium",
+                        ABSENCE_TYPE_STYLES[absence.type],
+                        absence.isPending && "opacity-70",
+                      )}
+                      title={
+                        absence.isPending
+                          ? `${absence.label} – noch nicht genehmigt`
+                          : `${absence.label}${absence.portion === 0.5 ? " (halber Tag)" : ""}`
+                      }
+                    >
+                      <Plane className="h-3 w-3 shrink-0" />
+                      {absence.label}
+                      {absence.portion === 0.5 && " ½"}
+                      {absence.isPending && " (beantragt)"}
                     </p>
                   )}
                 </div>

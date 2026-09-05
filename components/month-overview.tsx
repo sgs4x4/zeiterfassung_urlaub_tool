@@ -19,6 +19,7 @@ import {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
 import { ChevronLeft, ChevronRight, Lock, CheckCircle2, Clock } from "lucide-react"
 import { cn, formatHours } from "@/lib/utils"
+import { ABSENCE_TYPE_STYLES, resolveDayAbsence } from "@/lib/day-absence"
 import { isHoliday, type Bundesland } from "@/lib/holidays"
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, subMonths, addMonths, isWeekend } from "date-fns"
 import { de } from "date-fns/locale"
@@ -57,6 +58,7 @@ export function MonthOverview({ bundesland = "BY", monthlyHours = 173 }: MonthOv
 
   const entries = data?.entries ?? []
   const holidays = data?.holidays ?? []
+  const absences = data?.absences ?? []
   const isClosed = data?.isClosed ?? false
   const canClose = data?.canClose ?? false
 
@@ -176,6 +178,7 @@ export function MonthOverview({ bundesland = "BY", monthlyHours = 173 }: MonthOv
                       const isToday = isSameDay(day, new Date())
                       const isHolidayDay = isHoliday(day, holidays)
                       const holidayName = holidays.find((h) => h.date === format(day, "yyyy-MM-dd"))?.name
+                      const absence = resolveDayAbsence(format(day, "yyyy-MM-dd"), absences)
 
                       const cell = (
                         <div
@@ -183,6 +186,7 @@ export function MonthOverview({ bundesland = "BY", monthlyHours = 173 }: MonthOv
                             "flex aspect-square flex-col items-center justify-center rounded-lg border border-transparent p-1 transition-colors",
                             isWeekend(day) && "bg-muted/40 text-muted-foreground",
                             isHolidayDay && "bg-primary/[0.07]",
+                            absence && !absence.isPending && "bg-accent/50",
                             hasEntry && !isWeekend(day) && !isHolidayDay && "bg-primary/[0.07]",
                             isToday && "border-primary/60",
                             hasEntry && "cursor-pointer hover:bg-primary/15",
@@ -199,6 +203,21 @@ export function MonthOverview({ bundesland = "BY", monthlyHours = 173 }: MonthOv
                           {isHolidayDay && !hasEntry && (
                             <span className="mt-0.5 w-full truncate px-0.5 text-center text-[9px] text-primary" title={holidayName}>
                               {holidayName || "Feiertag"}
+                            </span>
+                          )}
+                          {/* Abwesenheit sichtbar machen – erklärt, warum an dem Tag kein oder
+                              nur ein halbes Soll steht. */}
+                          {absence && !isHolidayDay && (
+                            <span
+                              className={cn(
+                                "mt-0.5 w-full truncate px-0.5 text-center text-[9px] font-medium",
+                                ABSENCE_TYPE_STYLES[absence.type],
+                                absence.isPending && "opacity-60",
+                              )}
+                              title={`${absence.label}${absence.portion === 0.5 ? " (halber Tag)" : ""}${absence.isPending ? " – beantragt" : ""}`}
+                            >
+                              {absence.label}
+                              {absence.portion === 0.5 && " ½"}
                             </span>
                           )}
                         </div>

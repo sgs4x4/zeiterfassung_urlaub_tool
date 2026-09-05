@@ -12,6 +12,7 @@ import { useOvertimeBalance } from "@/hooks/queries/use-overtime-balance"
 import { useOvertimeTrend } from "@/hooks/queries/use-overtime-trend"
 import { useMonthData } from "@/hooks/queries/use-month-data"
 import type { Bundesland } from "@/lib/holidays"
+import { OvertimeAdjustments } from "./overtime-adjustments"
 
 const TREND_CHART_CONFIG: ChartConfig = {
   delta: { label: "Saldo", color: "var(--chart-1)" },
@@ -100,6 +101,7 @@ export function StatCards({ monthlyHours, bundesland }: StatCardsProps) {
             )}
           </div>
         )}
+        <OvertimeAdjustments className="mt-3" />
       </StatCard>
 
       <StatCard

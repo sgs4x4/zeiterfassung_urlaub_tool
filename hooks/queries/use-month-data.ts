@@ -16,7 +16,7 @@ export function useMonthData(year: number, month: number, bundesland: Bundesland
     queryKey: monthDataQueryKey(year, month, bundesland),
     queryFn: async () => {
       const data = await getMonthBoard(year, month)
-      return data ?? { entries: [], holidays: [], isClosed: false, canClose: false }
+      return data ?? { entries: [], holidays: [], absences: [], isClosed: false, canClose: false }
     },
   })
 }

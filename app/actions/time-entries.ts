@@ -14,6 +14,7 @@ import {
   loadOvertimeContext,
   targetHoursForMonth,
   calculateHoursFromTimes,
+  type OvertimeAdjustmentType,
   type TimeEntry,
 } from "@/lib/db"
 import { revalidatePath } from "next/cache"
@@ -22,6 +23,7 @@ import { de } from "date-fns/locale"
 import { createClient } from "@/lib/supabase/server"
 import { getCurrentUserAccess } from "@/lib/permissions-server"
 import { canActorManageTargetTime } from "@/lib/visibility"
+import type { AbsenceType } from "@/lib/absence-types"
 
 // Rückwirkendes Zeitfenster für eigene Einträge (Anlegen/Bearbeiten/Löschen).
 // Nicht exportiert: "use server"-Dateien dürfen ausschließlich async Funktionen exportieren.
@@ -236,6 +238,44 @@ export async function saveTimeEntryForUser(targetUserId: string, formData: FormD
   return { success: true }
 }
 
+export type MyOvertimeAdjustment = {
+  id: string
+  effectiveDate: string
+  hours: number
+  type: OvertimeAdjustmentType
+  reason: string | null
+}
+
+/**
+ * Eigene Buchungen auf dem Überstundenkonto. Ohne diese Ansicht sieht man als Mitarbeiter nur
+ * den Saldo, aber nicht, wodurch er sich verändert hat – z.B. dass ein genehmigter
+ * Freizeitausgleich 8 Stunden abgebucht hat oder eine Auszahlung verrechnet wurde.
+ */
+export async function getMyOvertimeAdjustments(limit = 10): Promise<MyOvertimeAdjustment[]> {
+  const session = await getServerSession()
+  if (!session?.user?.id || !session?.user?.email || !session?.user?.name) {
+    return []
+  }
+
+  const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
+  const supabase = await createClient()
+
+  const { data } = await supabase
+    .from("overtime_adjustments")
+    .select("id, effective_date, hours, type, reason")
+    .eq("user_id", user.id)
+    .order("effective_date", { ascending: false })
+    .limit(limit)
+
+  return (data || []).map((row) => ({
+    id: row.id as string,
+    effectiveDate: row.effective_date as string,
+    hours: Number(row.hours),
+    type: row.type as OvertimeAdjustmentType,
+    reason: (row.reason as string) || null,
+  }))
+}
+
 export type OvertimeTrendPoint = { month: string; delta: number }
 
 /**
@@ -288,10 +328,37 @@ export async function getOvertimeTrend(monthsBack = 6): Promise<OvertimeTrendPoi
   })
 }
 
+/**
+ * Abwesenheit, wie sie im Wochen-/Monatsboard angezeigt wird. Bewusst ohne Freitexte – im
+ * eigenen Board sieht man ohnehin nur die eigenen, aber der Typ wird auch anderswo verwendet.
+ */
+export type DayAbsence = {
+  start_date: string
+  end_date: string
+  type: AbsenceType
+  status: "pending" | "approved" | "rejected"
+  day_part: "full" | "half_am" | "half_pm"
+}
+
+async function getAbsencesInRange(userId: string, startDate: string, endDate: string): Promise<DayAbsence[]> {
+  const supabase = await createClient()
+  const { data } = await supabase
+    .from("absences")
+    .select("start_date, end_date, type, status, day_part")
+    .eq("user_id", userId)
+    .in("status", ["approved", "pending"])
+    .lte("start_date", endDate)
+    .gte("end_date", startDate)
+
+  return (data || []) as DayAbsence[]
+}
+
 export type WeekBoardData = {
   entries: (TimeEntry & { project_name: string | null; project_color: string | null })[]
   projects: { id: string; name: string; color: string | null }[]
   holidays: { date: string; name: string }[]
+  /** Genehmigte und beantragte Abwesenheiten, die in diese Woche fallen. */
+  absences: DayAbsence[]
   /** Monate ("yyyy-MM"), die von dieser Woche berührt und bereits abgeschlossen sind. */
   closedMonths: string[]
   /** Frühestes Datum, das der Nutzer noch selbst bearbeiten darf (null = unbeschränkt). */
@@ -319,7 +386,7 @@ export async function getWeekBoard(weekStart: string, weekEnd: string): Promise<
   const { getHolidaysForYear } = await import("./holidays")
   const bundesland = (user.bundesland || "BY") as Parameters<typeof getHolidaysForYear>[1]
 
-  const [entriesRes, assignedRes, holidayYears, closuresRes] = await Promise.all([
+  const [entriesRes, assignedRes, holidayYears, closuresRes, absences] = await Promise.all([
     supabase
       .from("time_entries")
       .select("*, projects(name, color)")
@@ -341,6 +408,7 @@ export async function getWeekBoard(weekStart: string, weekEnd: string): Promise<
         "month",
         monthKeys.map((key) => Number(key.slice(5, 7))),
       ),
+    getAbsencesInRange(user.id, weekStart, weekEnd),
   ])
 
   const weekHolidays = holidayYears
@@ -375,6 +443,7 @@ export async function getWeekBoard(weekStart: string, weekEnd: string): Promise<
     })) as WeekBoardData["entries"],
     projects: projects || [],
     holidays: weekHolidays.map((h) => ({ date: h.date, name: h.name })),
+    absences,
     closedMonths,
     editableFrom,
   }
@@ -383,6 +452,8 @@ export async function getWeekBoard(weekStart: string, weekEnd: string): Promise<
 export type MonthBoardData = {
   entries: TimeEntry[]
   holidays: { id: string; name: string; date: string; bundesland: string | null }[]
+  /** Genehmigte und beantragte Abwesenheiten des Monats – erklären ein reduziertes Tagessoll. */
+  absences: DayAbsence[]
   isClosed: boolean
   canClose: boolean
 }
@@ -406,7 +477,7 @@ export async function getMonthBoard(year: number, month: number): Promise<MonthB
   const { canCloseMonth } = await import("./month-closure")
   const supabase = await createClient()
 
-  const [entries, holidays, closureRes, canClose] = await Promise.all([
+  const [entries, holidays, closureRes, canClose, absences] = await Promise.all([
     getTimeEntriesForUser(user.id, startDate, endDate),
     getHolidaysForYear(year, (user.bundesland || "BY") as Parameters<typeof getHolidaysForYear>[1]),
     supabase
@@ -417,7 +488,8 @@ export async function getMonthBoard(year: number, month: number): Promise<MonthB
       .eq("month", month)
       .maybeSingle(),
     canCloseMonth(year, month),
+    getAbsencesInRange(user.id, startDate, endDate),
   ])
 
-  return { entries, holidays, isClosed: !!closureRes.data, canClose }
+  return { entries, holidays, absences, isClosed: !!closureRes.data, canClose }
 }
