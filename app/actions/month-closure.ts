@@ -97,6 +97,11 @@ export type UnclosedMonth = {
  * eine leere Liste zurückgegeben. Monate werden unabhängig davon zurückgegeben, ob in ihnen
  * überhaupt Zeit erfasst wurde (solange sie NACH dem ersten Eintrag liegen), da ein Monat auch
  * mit 0 Stunden bewusst abgeschlossen werden muss (z.B. durchgehend Urlaub/Krankheit).
+ *
+ * Monate, die komplett vor dem individuellen Überstunden-Trackingbeginn liegen (siehe
+ * `overtime_tracking_start_date`, scripts/020_overtime_tracking_start.sql), werden NICHT als
+ * offen gemeldet – sonst würde direkt nach Einführung dieser Erinnerung ein ganzer Rückstau an
+ * fachlich gar nicht mehr relevanten Alt-Monaten erzwungen abgeschlossen werden müssen.
  */
 export async function getMyUnclosedMonths(): Promise<UnclosedMonth[]> {
   const session = (await getServerSession()) as any
@@ -105,6 +110,7 @@ export async function getMyUnclosedMonths(): Promise<UnclosedMonth[]> {
   }
 
   const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
+  const trackingStart = user.overtime_tracking_start_date || null
   const supabase = await createClient()
 
   const [{ data: closures }, { data: firstEntry }] = await Promise.all([
@@ -126,7 +132,12 @@ export async function getMyUnclosedMonths(): Promise<UnclosedMonth[]> {
     const year = cursor.getFullYear()
     const month = cursor.getMonth() + 1
 
-    if (!closedKeys.has(`${year}-${month}`)) {
+    // Monate, die komplett vor dem Trackingbeginn enden, tragen kein Soll und müssen daher
+    // auch nicht abgeschlossen werden.
+    const monthEndStr = format(endOfMonth(cursor), "yyyy-MM-dd")
+    const isBeforeTracking = trackingStart !== null && monthEndStr < trackingStart
+
+    if (!closedKeys.has(`${year}-${month}`) && !isBeforeTracking) {
       const daysOverdue = differenceInDays(today, endOfMonth(cursor))
       result.push({ year, month, daysOverdue, isBlocking: daysOverdue >= 7 })
     }
@@ -145,10 +156,13 @@ export async function getMonthClosureSummary(year: number, month: number) {
   }
 
   const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
+  const trackingStart = user.overtime_tracking_start_date || null
   const supabase = await createClient()
 
-  const startDate = format(startOfMonth(new Date(year, month - 1)), "yyyy-MM-dd")
+  const monthStart = format(startOfMonth(new Date(year, month - 1)), "yyyy-MM-dd")
   const endDate = format(endOfMonth(new Date(year, month - 1)), "yyyy-MM-dd")
+  // Ab Trackingbeginn zählen: im Übergangsmonat nur die Tage ab dem Stichtag.
+  const startDate = trackingStart && trackingStart > monthStart ? trackingStart : monthStart
 
   const { data: entries } = await supabase
     .from("time_entries")
@@ -158,7 +172,8 @@ export async function getMonthClosureSummary(year: number, month: number) {
     .lte("date", endDate)
 
   const totalHours = (entries || []).reduce((sum, e) => sum + Number(e.hours), 0)
-  const expectedHours = await getMonthlyTargetHours(user.id, year, month, user.monthly_hours || 173)
+  // Taggenaues Soll: ohne Feiertage, ohne genehmigte Abwesenheiten, erst ab Trackingbeginn.
+  const expectedHours = await getMonthlyTargetHours(user.id, year, month)
 
   return {
     totalHours,
@@ -175,6 +190,7 @@ export async function closeMonth(year: number, month: number) {
   }
 
   const user = await findOrCreateUser(session.user.id, session.user.email, session.user.name)
+  const trackingStart = user.overtime_tracking_start_date || null
 
   // Prüfen ob Monat geschlossen werden darf
   const canClose = await canCloseMonth(year, month)
@@ -190,9 +206,11 @@ export async function closeMonth(year: number, month: number) {
 
   const supabase = await createClient()
 
-  // Zeiteinträge für den Monat abrufen
-  const startDate = format(startOfMonth(new Date(year, month - 1)), "yyyy-MM-dd")
+  // Zeiteinträge für den Monat abrufen – ab Trackingbeginn: im Übergangsmonat nur die Tage ab
+  // dem Stichtag, sonst der ganze Monat.
+  const monthStart = format(startOfMonth(new Date(year, month - 1)), "yyyy-MM-dd")
   const endDate = format(endOfMonth(new Date(year, month - 1)), "yyyy-MM-dd")
+  const startDate = trackingStart && trackingStart > monthStart ? trackingStart : monthStart
 
   const { data: entries } = await supabase
     .from("time_entries")
@@ -203,10 +221,9 @@ export async function closeMonth(year: number, month: number) {
     .order("date", { ascending: true })
 
   const totalHours = entries?.reduce((sum, e) => sum + Number(e.hours), 0) || 0
-  // Soll aus der Arbeitsverhältnis-Historie für GENAU diesen Monat auflösen, statt den
-  // aktuellen users.monthly_hours-Wert zu nehmen – der kann inzwischen (z.B. bei später
-  // abgeschlossenen Monaten) schon wieder geändert worden sein.
-  const expectedHours = await getMonthlyTargetHours(user.id, year, month, user.monthly_hours || 173)
+  // Taggenaues Soll für GENAU diesen Monat: Wochenplan des jeweiligen Tages (Vertragswechsel
+  // wirken damit nicht rückwirkend), ohne Feiertage und ohne genehmigte Abwesenheiten.
+  const expectedHours = await getMonthlyTargetHours(user.id, year, month)
   const overtime = totalHours - expectedHours
 
   // Monatsabschluss speichern

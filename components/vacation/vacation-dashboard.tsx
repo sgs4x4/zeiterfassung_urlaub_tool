@@ -28,13 +28,21 @@ import {
   type Absence,
   type BlockedDay,
 } from "@/app/actions/absences"
+import { ABSENCE_TYPE_LABELS, type AbsenceType } from "@/lib/absence-types"
 import { getHolidaysForYear } from "@/app/actions/holidays"
 import { cn } from "@/lib/utils"
 import { Progress } from "@/components/ui/progress"
 import { BUNDESLAENDER, type Bundesland, type Holiday } from "@/lib/holidays"
 
-const TYPE_LABELS: Record<string, string> = { vacation: "Urlaub", sick: "Krankheit", other: "Sonstiges" }
-const TYPE_COLORS: Record<string, string> = { vacation: "bg-blue-500", sick: "bg-red-400", other: "bg-amber-400" }
+const TYPE_LABELS = ABSENCE_TYPE_LABELS
+const TYPE_COLORS: Record<string, string> = {
+  vacation: "bg-blue-500",
+  sick: "bg-red-400",
+  other: "bg-amber-400",
+  special_leave: "bg-purple-500",
+  unpaid_leave: "bg-slate-400",
+  overtime_compensation: "bg-teal-500",
+}
 const STATUS_CONFIG = {
   pending:  { label: "Ausstehend", badge: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400" },
   approved: { label: "Genehmigt",  badge: "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400" },
@@ -65,7 +73,7 @@ function NewRequestDialog({
   readOnly?: boolean
   bundesland: Bundesland
 }) {
-  const [type, setType] = useState<"vacation" | "sick" | "other">("vacation")
+  const [type, setType] = useState<AbsenceType>("vacation")
   const [startDate, setStartDate] = useState("")
   const [endDate, setEndDate] = useState("")
   const [dayPart, setDayPart] = useState<"full" | "half_am" | "half_pm">("full")
@@ -183,12 +191,12 @@ function NewRequestDialog({
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           <div className="space-y-1.5">
             <Label>Art der Abwesenheit</Label>
-            <Select value={type} onValueChange={(v) => setType(v as "vacation" | "sick" | "other")}>
+            <Select value={type} onValueChange={(v) => setType(v as AbsenceType)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="vacation">Urlaub</SelectItem>
-                <SelectItem value="sick">Krankheit</SelectItem>
-                <SelectItem value="other">Sonstiges</SelectItem>
+                {(Object.keys(ABSENCE_TYPE_LABELS) as AbsenceType[]).map((key) => (
+                  <SelectItem key={key} value={key}>{ABSENCE_TYPE_LABELS[key]}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

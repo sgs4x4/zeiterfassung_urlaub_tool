@@ -3,6 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Clock, TrendingUp, TrendingDown, Minus } from "lucide-react"
 import { useOvertimeBalance } from "@/hooks/queries/use-overtime-balance"
+import { OvertimeAdjustments } from "@/components/dashboard/overtime-adjustments"
 
 export function OvertimeBadge() {
   const { data: overtime, isLoading } = useOvertimeBalance()
@@ -52,6 +53,7 @@ export function OvertimeBadge() {
           </div>
         </div>
         <p className="text-xs text-muted-foreground mt-2">Kumuliert seit Beginn der Erfassung</p>
+        <OvertimeAdjustments className="mt-3" />
       </CardContent>
     </Card>
   )

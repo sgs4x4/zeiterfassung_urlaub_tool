@@ -28,7 +28,7 @@ export function ExportButton({ startDate, endDate }: ExportButtonProps) {
         entry.user?.email || "",
         format(new Date(entry.date), "dd.MM.yyyy", { locale: de }),
         entry.hours.toString().replace(".", ","),
-        entry.project || "",
+        entry.projects?.name || "",
         entry.description?.replace(/"/g, '""') || "",
       ])
 
@@ -53,13 +53,14 @@ export function ExportButton({ startDate, endDate }: ExportButtonProps) {
       const data = await getAdminDashboardData(startDate, endDate)
 
       // CSV Header für Zusammenfassung
-      const headers = ["Mitarbeiter", "E-Mail", "Rolle", "Gesamtstunden", "Anzahl Einträge"]
+      const headers = ["Mitarbeiter", "E-Mail", "Rolle", "Gesamtstunden", "Anzahl Einträge", "Überstunden-Saldo"]
       const rows = data.users.map((user) => [
         user.name,
         user.email,
         user.role === "admin" ? "Admin" : "Mitarbeiter",
         user.totalHours.toFixed(2).replace(".", ","),
         user.entriesCount.toString(),
+        (user.overtimeBalance ?? 0).toFixed(2).replace(".", ","),
       ])
 
       const csvContent = [headers.join(";"), ...rows.map((row) => row.map((cell) => `"${cell}"`).join(";"))].join("\n")

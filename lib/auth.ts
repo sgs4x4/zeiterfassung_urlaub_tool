@@ -1,4 +1,8 @@
-import { getServerSession as getNextAuthSession, type NextAuthOptions } from "next-auth/next"
+// NextAuthOptions kommt in next-auth v4 aus "next-auth", nicht aus "next-auth/next". Mit dem
+// falschen Import war authOptions untypisiert, wodurch getServerSession() nur noch `{}` lieferte
+// und jeder session.user-Zugriff im gesamten Projekt einen Typfehler warf (~124 Stück).
+import { getServerSession as getNextAuthSession } from "next-auth/next"
+import type { NextAuthOptions } from "next-auth"
 
 // SECURITY NOTE (25.08.2026): next-auth@4.24.15 pinnt @auth/core als optionalen Peer
 // fest auf 0.34.3 – diese Version enthält bekannte kritische CVEs (GHSA-7rqj-j65f-68wh,
