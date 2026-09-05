@@ -28,6 +28,9 @@ CREATE INDEX IF NOT EXISTS idx_overtime_adjustments_user ON overtime_adjustments
 CREATE INDEX IF NOT EXISTS idx_overtime_adjustments_date ON overtime_adjustments(user_id, effective_date);
 -- Pro Abwesenheit darf es höchstens eine Ausgleichsbuchung geben (Schutz vor Doppelbuchung,
 -- z.B. wenn ein Antrag mehrfach genehmigt/erneut genehmigt wird).
+-- Hinweis: Der Index ist partiell und taugt deshalb NICHT als ON-CONFLICT-Ziel über PostgREST.
+-- Der Anwendungscode löscht daher eine vorhandene Buchung und legt sie neu an, statt upsert
+-- zu verwenden (siehe updateAbsenceStatus in app/actions/absences.tsx).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_overtime_adjustments_absence ON overtime_adjustments(absence_id)
   WHERE absence_id IS NOT NULL;
 

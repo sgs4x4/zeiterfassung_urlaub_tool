@@ -631,23 +631,41 @@ export async function updateAbsenceStatus(id: string, status: "approved" | "reje
       )
       const hours = absenceData.day_part === "full" ? scheduledHours : scheduledHours / 2
 
-      // upsert über den Unique-Index auf absence_id: eine erneute Genehmigung erzeugt keine
-      // zweite Abbuchung (siehe scripts/021_overtime_adjustments.sql).
-      const { error: adjustmentError } = await supabase.from("overtime_adjustments").upsert(
-        {
-          user_id: absenceData.user_id,
-          effective_date: absenceData.start_date,
-          hours: -Math.abs(hours),
-          type: "compensation",
-          reason: `Freizeitausgleich ${absenceData.start_date} bis ${absenceData.end_date}`,
-          absence_id: id,
-          created_by: actorDbUser?.id ?? null,
-        },
-        { onConflict: "absence_id" },
-      )
+      // Bewusst löschen + einfügen statt upsert: Der Unique-Index auf absence_id ist partiell
+      // (WHERE absence_id IS NOT NULL, siehe scripts/021). Ein partieller Index lässt sich über
+      // PostgREST nicht als ON-CONFLICT-Ziel adressieren – ein upsert scheitert dort mit
+      // "no unique or exclusion constraint matching the ON CONFLICT specification".
+      // Eine erneute Genehmigung erzeugt so trotzdem keine zweite Abbuchung.
+      await supabase.from("overtime_adjustments").delete().eq("absence_id", id)
+
+      const { error: adjustmentError } = await supabase.from("overtime_adjustments").insert({
+        user_id: absenceData.user_id,
+        effective_date: absenceData.start_date,
+        hours: -Math.abs(hours),
+        type: "compensation",
+        reason: `Freizeitausgleich ${absenceData.start_date} bis ${absenceData.end_date}`,
+        absence_id: id,
+        created_by: actorDbUser?.id ?? null,
+      })
+
       if (adjustmentError) {
         console.error("[absences] Ausgleichsbuchung fehlgeschlagen:", adjustmentError)
-        throw new Error("Antrag genehmigt, aber die Überstunden-Buchung ist fehlgeschlagen")
+
+        // Genehmigung zurücknehmen: Ein genehmigter Ausgleich ohne zugehörige Abbuchung wäre
+        // schlimmer als ein weiterhin offener Antrag – der Mitarbeiter hätte frei, ohne dass
+        // die Stunden vom Konto gehen.
+        await supabase
+          .from("absences")
+          .update({
+            status: absenceData.status,
+            reviewed_at: absenceData.reviewed_at ?? null,
+            reviewed_by: absenceData.reviewed_by ?? null,
+          })
+          .eq("id", id)
+
+        throw new Error(
+          `Die Überstunden-Buchung ist fehlgeschlagen, die Genehmigung wurde zurückgenommen. Ursache: ${adjustmentError.message}`,
+        )
       }
     } else {
       await supabase.from("overtime_adjustments").delete().eq("absence_id", id)
@@ -746,24 +764,32 @@ export async function createAbsenceForUser(params: {
   if (error) throw new Error(`Fehler beim Anlegen: ${error.message}`)
 
   // Überstundenausgleich bucht wie bei der regulären Genehmigung vom Konto ab.
+  // Einfaches insert statt upsert: Die Abwesenheit wurde gerade erst angelegt, es kann noch
+  // keine Buchung dazu geben (und ON CONFLICT funktioniert mit dem partiellen Unique-Index
+  // ohnehin nicht – siehe updateAbsenceStatus).
   if (type === "overtime_compensation" && inserted) {
     const scheduledHours = await getScheduledHoursForRange(userId, startDate, endDate)
     const hours = dayPart === "full" ? scheduledHours : scheduledHours / 2
-    const { error: adjustmentError } = await supabase.from("overtime_adjustments").upsert(
-      {
-        user_id: userId,
-        effective_date: startDate,
-        hours: -Math.abs(hours),
-        type: "compensation",
-        reason: `Freizeitausgleich ${startDate} bis ${endDate} (durch Admin eingetragen)`,
-        absence_id: inserted.id,
-        created_by: actor.id,
-      },
-      { onConflict: "absence_id" },
-    )
+    const { error: adjustmentError } = await supabase.from("overtime_adjustments").insert({
+      user_id: userId,
+      effective_date: startDate,
+      hours: -Math.abs(hours),
+      type: "compensation",
+      reason: `Freizeitausgleich ${startDate} bis ${endDate} (durch Admin eingetragen)`,
+      absence_id: inserted.id,
+      created_by: actor.id,
+    })
+
     if (adjustmentError) {
       console.error("[absences] Ausgleichsbuchung fehlgeschlagen:", adjustmentError)
-      throw new Error("Abwesenheit angelegt, aber die Überstunden-Buchung ist fehlgeschlagen")
+
+      // Die gerade angelegte Abwesenheit wieder entfernen, damit kein freigegebener Ausgleich
+      // ohne Abbuchung stehen bleibt.
+      await supabase.from("absences").delete().eq("id", inserted.id)
+
+      throw new Error(
+        `Die Überstunden-Buchung ist fehlgeschlagen, die Abwesenheit wurde nicht angelegt. Ursache: ${adjustmentError.message}`,
+      )
     }
   }
 
